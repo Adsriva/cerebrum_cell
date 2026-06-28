@@ -483,11 +483,22 @@ async function syncSparklines(supabase: any): Promise<{ rows: number; errors: st
   return { rows: saved, errors };
 }
 
-// ─── Section: News (per stock) ───────────────────────────────────────────
-// For each stock in notebook, pull /stock.recentNews. Optionally
-// summarise via NVIDIA NIM into a one-line sentiment label.
+// ─── Section: News (per stock) — WEEKLY, not daily ───────────────────────
+// News is far less time-sensitive than price/quotes, so it's gated to run
+// only once a week (Monday, IST) even though this whole function is
+// invoked daily by the same 4PM IST cron. No second cron job needed — the
+// other 6 days, this section is a no-op (zero indianapi.in calls, zero
+// NVIDIA calls). Pass ?force_news=true to bypass the gate for manual testing.
+function isWeeklyNewsDayIST(): boolean {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  return istNow.getUTCDay() === 1; // Monday
+}
 
-async function syncNews(supabase: any): Promise<{ rows: number; errors: string[] }> {
+async function syncNews(supabase: any, force = false): Promise<{ rows: number; errors: string[]; skipped?: boolean }> {
+  if (!force && !isWeeklyNewsDayIST()) {
+    return { rows: 0, errors: [], skipped: true };
+  }
   const errors: string[] = [];
 
   const { data: kv } = await supabase
@@ -628,6 +639,9 @@ Deno.serve(async (req: Request) => {
     auth: { persistSession: false },
   });
 
+  // Manual override for testing the weekly news gate outside its scheduled day.
+  const forceNews = new URL(req.url).searchParams.get("force_news") === "true";
+
   const started = Date.now();
   const report: Record<string, any> = {};
 
@@ -641,7 +655,7 @@ Deno.serve(async (req: Request) => {
   try { report.sectors    = await syncSectors(supabase); }    catch (e) { report.sectors    = { error: String(e) }; }
   try { report.quotes     = await syncQuotes(supabase); }     catch (e) { report.quotes     = { error: String(e) }; }
   try { report.sparklines = await syncSparklines(supabase); } catch (e) { report.sparklines = { error: String(e) }; }
-  try { report.news       = await syncNews(supabase); }       catch (e) { report.news       = { error: String(e) }; }
+  try { report.news       = await syncNews(supabase, forceNews); } catch (e) { report.news = { error: String(e) }; }
 
   report.elapsed_ms = Date.now() - started;
   report.indianapi_keys_configured = INDIANAPI_KEYS.length;

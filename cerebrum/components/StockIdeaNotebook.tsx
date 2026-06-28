@@ -1138,7 +1138,7 @@ function NewsPanel({ stock, upd }: any) {
         <div className="absolute inset-0 rounded-full border-4 border-sky-500 border-t-transparent animate-spin"/>
         <span className="text-xl">📰</span>
       </div>
-      <div className="text-slate-700 dark:text-slate-200 text-sm font-semibold">Fetching latest news…</div>
+      <div className="text-slate-700 dark:text-slate-200 text-sm font-semibold">Fetching this week's news…</div>
       <div className="text-slate-400 dark:text-slate-500 text-xs text-center px-8">NVIDIA is summarising recent headlines for <span className="font-medium text-slate-600 dark:text-slate-300">{stock.name}</span></div>
     </div>
   );
@@ -1146,12 +1146,12 @@ function NewsPanel({ stock, upd }: any) {
   if (!news) return (
     <div className="flex flex-col items-center justify-center h-64 gap-4">
       <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl shadow-lg" style={{background:'linear-gradient(135deg,#76b900,#5a8c00)'}}>📰</div>
-      <div className="text-slate-800 dark:text-slate-100 font-bold text-sm">No News Fetched Yet</div>
-      <div className="text-slate-400 dark:text-slate-500 text-xs text-center px-6 leading-relaxed">NewsAPI feed for <span className="font-semibold text-blue-600 dark:text-blue-400">{stock.name}</span> · NVIDIA NIM summarises sentiment</div>
+      <div className="text-slate-800 dark:text-slate-100 font-bold text-sm">No Weekly Digest Yet</div>
+      <div className="text-slate-400 dark:text-slate-500 text-xs text-center px-6 leading-relaxed">Weekly news for <span className="font-semibold text-blue-600 dark:text-blue-400">{stock.name}</span> · synced every Monday via indianapi.in · NVIDIA NIM summarises sentiment</div>
       <button onClick={refresh} style={{background:'linear-gradient(135deg,#76b900,#5a8c00)'}} className="text-white text-sm px-6 py-2.5 rounded-2xl font-semibold hover:opacity-90 transition-opacity shadow-lg">
-        📡 Fetch Latest News
+        📡 Fetch This Week's News
       </button>
-      <div className="text-[9px] text-slate-400 dark:text-slate-500">Powered by NewsAPI + NVIDIA NIM</div>
+      <div className="text-[9px] text-slate-400 dark:text-slate-500">Powered by indianapi.in + NVIDIA NIM · refreshes weekly</div>
     </div>
   );
 
@@ -1162,8 +1162,8 @@ function NewsPanel({ stock, upd }: any) {
       <div style={{border:`2px solid ${sc}30`, background:`${sc}06`}} className="rounded-2xl p-3.5 shadow-sm">
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1">
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="text-[9px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-semibold">Latest Developments</div>
+            <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+              <div className="text-[9px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-semibold">🗞️ This Week's News</div>
               {news.aiGenerated && <span className="text-[8px] font-semibold px-1.5 py-[1px] rounded-full" style={{color:'#76b900',background:'rgba(118,185,0,0.08)',border:'1px solid rgba(118,185,0,0.25)'}}>✦ NVIDIA NIM</span>}
             </div>
             <div className="text-[12px] text-slate-700 dark:text-slate-200 font-medium leading-snug">{news.headline}</div>
@@ -1176,7 +1176,7 @@ function NewsPanel({ stock, upd }: any) {
       </div>
 
       {apiStatus==='mock' && (
-        <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-400/25 rounded-xl px-3 py-2"><span>⚠</span><span>No live news in Supabase yet — showing demo data. GitHub Actions will populate after first run.</span></div>
+        <div className="flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-400/25 rounded-xl px-3 py-2"><span>⚠</span><span>No live news synced yet — showing demo data. The weekly sync (every Monday) will populate this automatically.</span></div>
       )}
 
       {/* News items */}
@@ -1241,7 +1241,7 @@ function NewsPanel({ stock, upd }: any) {
       )}
 
       <div className="flex gap-2">
-        <button onClick={refresh} className="flex-1 text-xs text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 py-2 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-200 dark:hover:border-blue-500/40 transition-colors">📡 Refresh (NVIDIA NIM)</button>
+        <button onClick={refresh} className="flex-1 text-xs text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 py-2 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-200 dark:hover:border-blue-500/40 transition-colors">📡 Refresh This Week's Digest</button>
       </div>
     </div>
   );
@@ -3140,7 +3140,7 @@ function CerebrumLogin({onUnlock, pass = CEREBRUM_PASS}) {
           <div style={{color:'#e8dcc8',fontSize:'clamp(24px, 7vw, 32px)',fontWeight:900,letterSpacing:'clamp(3px, 1.2vw, 6px)',textTransform:'uppercase',textShadow:'0 2px 8px rgba(0,0,0,0.5)'}}>CEREBRUM</div>
           <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:8,marginTop:4}}>
             <div style={{width:40,height:1,background:'linear-gradient(90deg,transparent,#d4af37)'}}/>
-            <span style={{color:'#d4af37',fontSize:12,letterSpacing:4,textTransform:'uppercase',fontWeight:600}}>OF ADARSH</span>
+            <span style={{color:'#d4af37',fontSize:12,letterSpacing:4,textTransform:'uppercase',fontWeight:600}}>LOGIC 🤝 WEALTH</span>
             <div style={{width:40,height:1,background:'linear-gradient(90deg,#d4af37,transparent)'}}/>
           </div>
           <div style={{color:'#d4af37',fontSize:10,marginTop:8,opacity:0.5}}>◇</div>
