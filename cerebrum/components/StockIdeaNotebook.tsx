@@ -1252,7 +1252,8 @@ function NewsPanel({ stock, upd }: any) {
 function DetailPanel({stock, onClose, upd, onMove, onDup, onArc, onDel}: any) {
   const [tab, setTab] = useState('notes');
   const [showAct, setShowAct] = useState(false);
-  const [showMov, setShowMov] = useState(false);
+  // false = panel closed; 'move' / 'dup' = panel open showing the relevant action's tab grid
+  const [showMov, setShowMov] = useState<false | 'move' | 'dup'>(false);
   const { data: px, loading: pxLoading } = useMarketData(stock.name);
   const pos = px ? px.chg >= 0 : true;
   const ptabs = [{id:'notes',l:'Research',e:'📝'},{id:'conv',l:'Conviction',e:'🎯'},{id:'verd',l:'Verdict',e:'⚡'},{id:'news',l:'News',e:'📰'},{id:'mets',l:'Metrics',e:'📊'}];
@@ -1356,10 +1357,10 @@ function AddStockModal({activeTab, stocks, onAdd, onClose}) {
   const [cap, setCap] = useState('Small Cap');
   const iRef = useRef(null);
   useEffect(()=>{ iRef.current?.focus(); },[]);
-  const known = useMemo(()=>new Set(Object.values(stocks).map(s=>s.name)),[stocks]);
+  const known = useMemo(()=>new Set(Object.values(stocks).map((s:any)=>s.name)),[stocks]);
   const sugg = useMemo(()=>{ if (!q.trim()) return UNIVERSE.slice(0,10); const qq=q.toLowerCase(); return UNIVERSE.filter(x=>x.n.toLowerCase().includes(qq)).slice(0,10); },[q]);
   // Sector-aware sub-sector suggestions: preset list first, then user-added ones
-  const allSubSectors = useMemo(()=>[...new Set(Object.values(stocks).map(s=>s.subSector).filter(Boolean))].sort(),[stocks]);
+  const allSubSectors = useMemo(()=>Array.from(new Set(Object.values(stocks).map((s:any)=>s.subSector).filter(Boolean))).sort() as string[],[stocks]);
   const filteredSubSugg = useMemo(()=>{
     const preset = SECTOR_SUBSECTORS[sector] || [];
     const userAdded = allSubSectors.filter(x=>!preset.includes(x));
@@ -1547,7 +1548,7 @@ function GlobalSearch({stocks, onClose, onSel}) {
   const res = useMemo(()=>{
     if (!q.trim()) return [];
     const qq=q.toLowerCase();
-    return Object.values(stocks).filter(s=>!s.arc&&(s.name.toLowerCase().includes(qq)||s.sector.toLowerCase().includes(qq)||(s.subSector||'').toLowerCase().includes(qq)||s.st.toLowerCase().includes(qq)||s.src.some(x=>x.toLowerCase().includes(qq)||(TAB_FULL[x]||'').toLowerCase().includes(qq))||s.notes.some(n=>n.txt.toLowerCase().includes(qq))));
+    return (Object.values(stocks) as any[]).filter((s:any)=>!s.arc&&(s.name.toLowerCase().includes(qq)||s.sector.toLowerCase().includes(qq)||(s.subSector||'').toLowerCase().includes(qq)||s.st.toLowerCase().includes(qq)||s.src.some((x:string)=>x.toLowerCase().includes(qq)||(TAB_FULL[x]||'').toLowerCase().includes(qq))||s.notes.some((n:any)=>n.txt.toLowerCase().includes(qq))));
   },[q,stocks]);
   return (
     <div onClick={e=>{if(e.target===e.currentTarget)onClose();}} style={{background:'rgba(15,23,42,0.45)',backdropFilter:'blur(10px)'}} className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4">
@@ -1587,9 +1588,9 @@ const IPO_SIGNALS = [
   {id:'Avoid',      col:'#ef4444', bg:'rgba(239,68,68,0.12)',  icon:'🔴'},
 ];
 
-function daysToListing(dateStr) {
+function daysToListing(dateStr: string | null | undefined) {
   if (!dateStr) return null;
-  const diff = Math.ceil((new Date(dateStr) - new Date()) / (1000*60*60*24));
+  const diff = Math.ceil((new Date(dateStr).getTime() - new Date().getTime()) / (1000*60*60*24));
   if (diff < 0) return `Listed ${Math.abs(diff)}d ago`;
   if (diff === 0) return 'Listing Today! 🚀';
   return `${diff}d to listing`;
@@ -1828,8 +1829,8 @@ function IpoView({ipoList, onAdd, onDelete, onUpdateSignal}) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId]   = useState(null);
 
-  const upcoming = ipoList.filter(x=>x.listingDate && new Date(x.listingDate) >= new Date()).sort((a,b)=>new Date(a.listingDate)-new Date(b.listingDate));
-  const past     = ipoList.filter(x=>!x.listingDate || new Date(x.listingDate) < new Date()).sort((a,b)=>new Date(b.listingDate||0)-new Date(a.listingDate||0));
+  const upcoming = ipoList.filter((x:any)=>x.listingDate && new Date(x.listingDate) >= new Date()).sort((a:any,b:any)=>new Date(a.listingDate).getTime()-new Date(b.listingDate).getTime());
+  const past     = ipoList.filter((x:any)=>!x.listingDate || new Date(x.listingDate) < new Date()).sort((a:any,b:any)=>new Date(b.listingDate||0).getTime()-new Date(a.listingDate||0).getTime());
 
   const IpoCard = ({ipo}) => {
     const sig = IPO_SIGNALS.find(s=>s.id===ipo.signal)||IPO_SIGNALS[1];
@@ -2005,7 +2006,7 @@ function SectorsView({sectorNotes, sectorTags, onSave, onTag}) {
   }, [sel, selSub, page]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
-  const doSave      = (val)       => { onSave(noteKey(sel, selSub, page), val ?? draft); setSaved(true); };
+  const doSave      = (val?: string) => { onSave(noteKey(sel, selSub, page), val ?? draft); setSaved(true); };
   const selectSec   = (s)         => { setSel(s); setSelSub(null); setPage(1); setExpanded(p=>({...p,[s]:true})); };
   const selectSub   = (s, sub)    => { setSel(s); setSelSub(sub);  setPage(1); };
 
@@ -2627,7 +2628,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
   const bySect = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.sector]=(m[s.sector]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
   const bySrc  = useMemo(()=>{ const m: any={}; all.forEach(s=>s.src.forEach((x: string)=>{const k=TAB_FULL[x]||x;m[k]=(m[k]||0)+1;})); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
   const bySt   = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.st]=(m[s.st]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
-  const hc = all.filter(s=>Object.values(s.sc as any).reduce((a: any,b: any)=>a+b,0)>25||s.st==='High Conviction');
+  const hc = all.filter((s:any)=>(Object.values(s.sc) as number[]).reduce((a:number,b:number)=>a+b,0)>25||s.st==='High Conviction');
   const recentNotes = useMemo(()=>{ const ns: any[]=[]; all.forEach(s=>s.notes.forEach((n: any)=>ns.push({...n,sn:s.name,sid:s.id}))); return ns.sort((a,b)=>b.id.localeCompare(a.id)).slice(0,5); },[all]);
   const Bar = ({label,count,max,col='#3b82f6'}: any) => (
     <div className="flex items-center gap-2">
@@ -2684,8 +2685,8 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
           </div>
           {!hc.length && <div className="text-slate-400 text-xs text-center py-4">Score stocks to build conviction list</div>}
           <div className="space-y-2">
-            {hc.slice(0,5).map(s=>{
-              const tot=Math.round(Object.values(s.sc).reduce((a,b)=>a+b,0)/5*10);
+            {hc.slice(0,5).map((s:any)=>{
+              const tot=Math.round((Object.values(s.sc) as number[]).reduce((a:number,b:number)=>a+b,0)/5*10);
               const lq = liveQuotes?.[s.name];
               const kd = lq ? { px: lq.price, chg: lq.day_pct } : GROWW_SNAPSHOT[s.name];
               return (
@@ -2759,17 +2760,17 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-2xl p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
           <div className="text-[9px] text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-3 font-bold">By Sector</div>
-          <div className="space-y-2">{bySect.map(([s,c])=><Bar key={s} label={s} count={c} max={mx1} col="#3b82f6"/>)}{!bySect.length&&<div className="text-[11px] text-slate-400">No stocks yet</div>}</div>
+          <div className="space-y-2">{bySect.map(([s,c]:any)=><Bar key={s} label={s} count={c} max={mx1} col="#3b82f6"/>)}{!bySect.length&&<div className="text-[11px] text-slate-400">No stocks yet</div>}</div>
         </div>
         <div className="rounded-2xl p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
           <div className="text-[9px] text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-3 font-bold">By Time Frame</div>
-          <div className="space-y-2">{bySrc.map(([s,c])=><Bar key={s} label={s} count={c} max={mx2} col="#8b5cf6"/>)}{!bySrc.length&&<div className="text-[11px] text-slate-400">No sources</div>}</div>
+          <div className="space-y-2">{bySrc.map(([s,c]:any)=><Bar key={s} label={s} count={c} max={mx2} col="#8b5cf6"/>)}{!bySrc.length&&<div className="text-[11px] text-slate-400">No sources</div>}</div>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-2xl p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
           <div className="text-[9px] text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-3 font-bold">By Watch Status</div>
-          <div className="space-y-2">{bySt.map(([st,c])=>{ const m=SM[st]||SM['New Idea']; return (<div key={st} className="flex items-center justify-between py-0.5"><div className="flex items-center gap-2"><div style={{background:m.c}} className="w-2 h-2 rounded-full"/><span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">{st}</span></div><span style={{color:m.c}} className="text-xs font-bold">{c}</span></div>); })}{!bySt.length&&<div className="text-[11px] text-slate-400">No stocks</div>}</div>
+          <div className="space-y-2">{bySt.map(([st,c]:any)=>{ const m=SM[st]||SM['New Idea']; return (<div key={st} className="flex items-center justify-between py-0.5"><div className="flex items-center gap-2"><div style={{background:m.c}} className="w-2 h-2 rounded-full"/><span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">{st}</span></div><span style={{color:m.c}} className="text-xs font-bold">{c as number}</span></div>); })}{!bySt.length&&<div className="text-[11px] text-slate-400">No stocks</div>}</div>
         </div>
         <div className="rounded-2xl p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
           <div className="text-[9px] text-slate-500 dark:text-slate-300 uppercase tracking-widest mb-3 font-bold">✎ Recent Research Notes</div>
@@ -2788,7 +2789,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
 // ─── ARCHIVE VIEW ─────────────────────────────────────────────────────────
 
 function ArchiveView({stocks, onRestore, onSel}) {
-  const arc = Object.values(stocks).filter(s=>s.arc);
+  const arc = (Object.values(stocks) as any[]).filter((s:any)=>s.arc);
   return (
     <div className="max-w-3xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
@@ -2815,8 +2816,8 @@ function ArchiveView({stocks, onRestore, onSel}) {
 // ─── SIDEBAR ──────────────────────────────────────────────────────────────
 
 function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, watchItems, onRemoveWatch, onAddWatch, onWatchClick, onChangePass}) {
-  const allCnt  = Object.values(stocks).filter(s=>!s.arc).length;
-  const arcCnt  = Object.values(stocks).filter(s=>s.arc).length;
+  const allCnt  = (Object.values(stocks) as any[]).filter((s:any)=>!s.arc).length;
+  const arcCnt  = (Object.values(stocks) as any[]).filter((s:any)=>s.arc).length;
   const [wrExpand, setWrExpand] = useState(true);
   const NAV = [
     {id:'dashboard', l:'Dashboard',   e:'◈', isActive:view==='dashboard', action:()=>setView('dashboard')},
@@ -2850,7 +2851,7 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
           <button key={x.id} onClick={x.action}
             className={`w-full flex items-center ${col?'justify-center px-1.5':'gap-2.5 px-2.5'} py-2 rounded-xl transition-all ${x.isActive?'bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-300 shadow-sm':'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'}`}>
             <span className="text-sm flex-shrink-0">{x.e}</span>
-            {!col&&<><span className="text-[12px] font-semibold flex-1">{x.l}</span>{(x.badge||0)>0&&<span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-1.5 py-[2px] rounded-full font-medium">{x.badge}</span>}</>}
+            {!col&&<span className="text-[12px] font-semibold flex-1">{x.l}</span>}
           </button>
         ))}
       </nav>
@@ -3203,8 +3204,8 @@ function CerebrumLogin({onUnlock, pass = CEREBRUM_PASS}) {
             boxShadow:'0 4px 20px rgba(212,175,55,0.3)',
             transition:'transform 0.2s, box-shadow 0.2s',
           }}
-          onMouseEnter={e=>{e.target.style.transform='translateY(-1px)';e.target.style.boxShadow='0 6px 28px rgba(212,175,55,0.45)';}}
-          onMouseLeave={e=>{e.target.style.transform='translateY(0)';e.target.style.boxShadow='0 4px 20px rgba(212,175,55,0.3)';}}
+          onMouseEnter={e=>{const t=e.currentTarget;t.style.transform='translateY(-1px)';t.style.boxShadow='0 6px 28px rgba(212,175,55,0.45)';}}
+          onMouseLeave={e=>{const t=e.currentTarget;t.style.transform='translateY(0)';t.style.boxShadow='0 4px 20px rgba(212,175,55,0.3)';}}
         >
           UNLOCK CEREBRUM <span style={{fontSize:16}}>→</span>
         </button>
@@ -3237,7 +3238,7 @@ export default function StockIdeaNotebook() {
   const [sectorNotes, setSectorNotes] = useState<any>({});
   const [sectorTags,  setSectorTags]  = useState<any>({});
   const [activeTab, setActiveTab] = useState('Short');
-  const [view, setView] = useState('dashboard');
+  const [view, setView] = useState<string>('dashboard');
   const [selId, setSelId] = useState<string|null>(null);
   const [coll, setColl] = useState<any>({});
   const [sectFil, setSectFil] = useState('All');
@@ -3501,8 +3502,8 @@ export default function StockIdeaNotebook() {
           )}
         </div>
 
-        {/* Expert tab strip */}
-        {view==='watchlist'&&(
+        {/* Expert tab strip — visible on watchlist and gainers so users can switch between them without re-opening the sidebar */}
+        {(view==='watchlist' || view==='gainers')&&(
           <div className="flex items-center overflow-x-auto flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
         {/* Expert tabs */}
             {TABS.filter(t=>t!=='USA').map((t,i)=>{

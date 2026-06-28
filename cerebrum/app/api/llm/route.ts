@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { nvidiaJSON } from "@/lib/nvidia";
 
-export const runtime = "nodejs";
+// Edge runtime: NVIDIA Llama-3.1 70B takes ~20-25s; Netlify's default Node Function
+// timeout is 10s on the free tier, but Edge Functions get up to 50s — required for
+// the AI Verdict and News Summary calls not to time out in production.
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
+export const maxDuration = 50;
 
 type VerdictReq = {
   mode: "verdict";
