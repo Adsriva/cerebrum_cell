@@ -7,6 +7,7 @@ import {
   fetchIndices, fetchSectors, fetchGainers, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
 } from "@/lib/supabase";
 import { callVerdict as llmVerdict, callNewsSummary as llmNewsSummary } from "@/lib/llm";
+import { loginWithPassword, verifyMasterPassword, changeNotebookPassword } from "@/lib/auth";
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────
 
@@ -2929,8 +2930,6 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
 
 // ─── CHANGE PASSWORD MODAL ────────────────────────────────────────────────
 
-const MASTER_PASS = 'REDACTED_ROTATED_SECRET';
-
 function ChangePasswordModal({onSave, onClose}) {
   const [step, setStep]             = useState(1);
   const [master, setMaster]         = useState('');
@@ -2939,15 +2938,27 @@ function ChangePasswordModal({onSave, onClose}) {
   const [showM, setShowM]           = useState(false);
   const [showN, setShowN]           = useState(false);
   const [err, setErr]               = useState('');
+  const [busy, setBusy]             = useState(false);
 
-  const verifyMaster = () => {
-    if (master === MASTER_PASS) { setStep(2); setErr(''); }
-    else { setErr('Incorrect master password'); setTimeout(()=>setErr(''),1800); }
+  const verifyMaster = async () => {
+    setBusy(true);
+    try {
+      const { ok } = await verifyMasterPassword(master);
+      if (ok) { setStep(2); setErr(''); }
+      else { setErr('Incorrect master password'); setTimeout(()=>setErr(''),1800); }
+    } catch { setErr('Network error — try again'); setTimeout(()=>setErr(''),1800); }
+    setBusy(false);
   };
-  const savePass = () => {
+  const savePass = async () => {
     if (!newPass.trim()) { setErr('Password cannot be empty'); return; }
     if (newPass !== confirmPass) { setErr('Passwords do not match'); return; }
-    onSave(newPass.trim());
+    setBusy(true);
+    try {
+      const { ok } = await changeNotebookPassword(master, newPass.trim());
+      if (ok) onSave(newPass.trim());
+      else { setErr('Could not save — try again'); setTimeout(()=>setErr(''),1800); }
+    } catch { setErr('Network error — try again'); setTimeout(()=>setErr(''),1800); }
+    setBusy(false);
   };
 
   return (
@@ -2975,10 +2986,10 @@ function ChangePasswordModal({onSave, onClose}) {
                 <button onClick={()=>setShowM(!showM)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">{showM?'🙈':'👁'}</button>
               </div>
               {err && <div className="text-[11px] text-red-500 text-center">{err}</div>}
-              <button onClick={verifyMaster} disabled={!master}
+              <button onClick={verifyMaster} disabled={!master||busy}
                 style={master?{background:'linear-gradient(135deg,#3b82f6,#6366f1)'}:{}}
                 className="w-full py-2.5 rounded-xl text-white font-bold text-sm disabled:bg-slate-200 disabled:opacity-50 hover:opacity-90 transition-all">
-                Verify →
+                {busy?'Verifying…':'Verify →'}
               </button>
             </>
           ) : (
@@ -3001,10 +3012,10 @@ function ChangePasswordModal({onSave, onClose}) {
               {newPass && confirmPass && newPass===confirmPass && (
                 <div className="text-[11px] text-emerald-600 text-center font-semibold">✓ Passwords match</div>
               )}
-              <button onClick={savePass} disabled={!newPass||!confirmPass}
+              <button onClick={savePass} disabled={!newPass||!confirmPass||busy}
                 style={newPass&&confirmPass?{background:'linear-gradient(135deg,#22c55e,#16a34a)'}:{}}
                 className="w-full py-2.5 rounded-xl text-white font-bold text-sm disabled:bg-slate-200 disabled:opacity-50 hover:opacity-90 transition-all">
-                Save New Password ✓
+                {busy?'Saving…':'Save New Password ✓'}
               </button>
             </>
           )}
@@ -3016,23 +3027,31 @@ function ChangePasswordModal({onSave, onClose}) {
 
 // ─── CEREBRUM LOGIN ───────────────────────────────────────────────────────
 
-const CEREBRUM_PASS = 'REDACTED_ROTATED_SECRET';
-
-function CerebrumLogin({onUnlock, pass = CEREBRUM_PASS}) {
+function CerebrumLogin({onUnlock}) {
   const [pw, setPw]       = useState('');
   const [show, setShow]   = useState(false);
   const [err, setErr]     = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [checking, setChecking] = useState(false);
 
-  const tryUnlock = () => {
-    if (pw === pass) {
-      setErr(false);
-      setUnlocking(true);
-      setTimeout(()=> onUnlock(), 2400);
-    } else {
+  const tryUnlock = async () => {
+    if (checking) return;
+    setChecking(true);
+    try {
+      const { ok } = await loginWithPassword(pw);
+      if (ok) {
+        setErr(false);
+        setUnlocking(true);
+        setTimeout(()=> onUnlock(), 2400);
+      } else {
+        setErr(true);
+        setTimeout(()=>setErr(false), 1500);
+      }
+    } catch {
       setErr(true);
       setTimeout(()=>setErr(false), 1500);
     }
+    setChecking(false);
   };
 
   // Unlock animation overlay
@@ -3227,7 +3246,6 @@ export default function StockIdeaNotebook() {
   const [authed, setAuthed]         = useState(false);
   const [loaded, setLoaded]         = useState(false);
   const [passLoaded, setPassLoaded]   = useState(false);
-  const [activePass, setActivePass]   = useState(CEREBRUM_PASS);
   const [marketData, setMarketData]   = useState<any>(null);
   const [marketLoading, setMarketLoading] = useState(false);
   const [showChangePass, setShowChangePass] = useState(false);
@@ -3261,8 +3279,7 @@ export default function StockIdeaNotebook() {
   useEffect(()=>{
     const preload = async () => {
       try {
-        const [p, theme] = await Promise.all([sbGet('notebook_password'), sbGet('theme_mode')]);
-        if (typeof p === 'string' && p.length > 0) setActivePass(p);
+        const theme = await sbGet('theme_mode');
         if (theme === 'dark' || theme === 'light') {
           setThemeMode(theme);
           try { document.documentElement.classList.toggle('dark', theme === 'dark'); localStorage.setItem('cerebrum_theme', theme); } catch {}
@@ -3361,10 +3378,8 @@ export default function StockIdeaNotebook() {
     refreshMarket();
   },[loaded]);
 
-  // Save password
-  const savePassword = (newPass: string) => {
-    setActivePass(newPass);
-    sbSet('notebook_password', newPass).catch(()=>{});
+  // Password change already persisted server-side by ChangePasswordModal via /api/auth.
+  const savePassword = () => {
     setShowChangePass(false);
   };
 
@@ -3439,7 +3454,7 @@ export default function StockIdeaNotebook() {
       <div style={{width:32,height:32,borderRadius:'50%',border:'3px solid rgba(212,175,55,0.3)',borderTopColor:'#d4af37'}} className="animate-spin"/>
     </div>
   );
-  if (!authed) return <CerebrumLogin pass={activePass} onUnlock={()=>setAuthed(true)}/>;
+  if (!authed) return <CerebrumLogin onUnlock={()=>setAuthed(true)}/>;
 
   if (!loaded) return (
     <div style={{background:'#f8fafc'}} className="min-h-screen flex items-center justify-center">

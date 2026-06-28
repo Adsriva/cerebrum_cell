@@ -62,4 +62,11 @@ Migrating to Hostinger later requires no code change — Hostinger supports Next
 
 ## Auth gate
 
-The Cerebrum login uses a single password stored in `notebook_store.notebook_password` (default `REDACTED_ROTATED_SECRET`, changeable via the sidebar key icon with master `REDACTED_ROTATED_SECRET`). This is **not** real auth — anyone with the link sees the login screen but the data itself is exposed via Supabase RLS-allowed reads. If you publish the URL publicly, enable Supabase RLS row-level policies on `notebook_store` too.
+The Cerebrum login checks a single password against `notebook_store.notebook_password`, verified **server-side only** in `app/api/auth/route.ts` using the Supabase service-role key — the browser never receives the password or the master password used to change it. RLS on `notebook_store` explicitly blocks the anon role from reading or writing the `notebook_password` key (see `supabase/migrations/0002_secure_notebook_password.sql`); every other key (notes, watchlists, etc.) stays anon-readable/writable as before, since this is a personal single-user notebook, not multi-tenant data.
+
+Required server-only env vars (set in `.env.local` locally and in Netlify's environment settings for production — never commit them):
+- `MASTER_PASSWORD` — required to change the notebook password via the sidebar key icon
+- `NOTEBOOK_DEFAULT_PASSWORD` — used only if no password has been set yet in the DB
+- `SUPABASE_SERVICE_ROLE_KEY` — from Supabase Dashboard → Project Settings → API
+
+This is still not multi-tenant auth — anyone with the link sees the login screen, and a correct password unlocks the same shared notebook for anyone who has it.
