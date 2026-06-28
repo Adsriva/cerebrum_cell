@@ -1,0 +1,29 @@
+# Per-developer tooling state (Claude Code session, IDE)
+.claude/
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Node / Next.js (inside cerebrum/)
+node_modules/
+.next/
+out/
+
+# Env files — never commit secrets
+.env
+.env.local
+.env*.local
+
+# Build & deploy caches
+.netlify/
+.vercel/
+
+# Python (for any local scripts)
+__pycache__/
+*.pyc
+
+# Logs
+*.log

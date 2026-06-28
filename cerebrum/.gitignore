@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+.env*.local
+.DS_Store
+*.log
+.netlify/
+.vercel/
+__pycache__/
+*.pyc
+.pytest_cache/
+.python-version
+.idea/
+.vscode/
