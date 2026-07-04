@@ -185,7 +185,7 @@ async function isMarketOpenToday(): Promise<{ open: boolean; reason: string }> {
   }
 }
 
-async function syncIndices(db: ReturnType<typeof getDatabase>): Promise<{ rows: number; errors: string[] }> {
+async function syncIndices(): Promise<{ rows: number; errors: string[] }> {
   const errors: string[] = [];
   const rows: Array<{ key: string; price: number | null; change_pct: number | null }> = [];
 
@@ -227,7 +227,7 @@ async function syncIndices(db: ReturnType<typeof getDatabase>): Promise<{ rows: 
 
   for (const r of rows) {
     try {
-      await db.sql`
+      await getDatabase().sql`
         INSERT INTO market_indices (key, price, change_pct, updated_at)
         VALUES (${r.key}, ${r.price}, ${r.change_pct}, now())
         ON CONFLICT (key) DO UPDATE SET price = excluded.price, change_pct = excluded.change_pct, updated_at = excluded.updated_at
@@ -236,6 +236,7 @@ async function syncIndices(db: ReturnType<typeof getDatabase>): Promise<{ rows: 
       errors.push(`upsert index ${r.key}: ${(e as Error).message}`);
     }
   }
+
   return { rows: rows.length, errors };
 }
 
@@ -249,13 +250,13 @@ function shouldSyncStock(s: any): boolean {
   return true;
 }
 
-async function loadStockNames(db: ReturnType<typeof getDatabase>): Promise<string[]> {
-  const rows = await db.sql`SELECT value FROM notebook_store WHERE key = 'stocks' LIMIT 1`;
+async function loadStockNames(): Promise<string[]> {
+  const rows = await getDatabase().sql`SELECT value FROM notebook_store WHERE key = 'stocks' LIMIT 1`;
   const stocksObj = (rows?.[0]?.value ?? {}) as Record<string, any>;
   return Object.values(stocksObj).filter(shouldSyncStock).map((s: any) => s.name);
 }
 
-async function syncQuotes(db: ReturnType<typeof getDatabase>, names: string[]): Promise<{ rows: number; errors: string[] }> {
+async function syncQuotes(names: string[]): Promise<{ rows: number; errors: string[] }> {
   const errors: string[] = [];
   let saved = 0;
 
@@ -271,7 +272,7 @@ async function syncQuotes(db: ReturnType<typeof getDatabase>, names: string[]): 
         return row ? num(row.nsePrice ?? row.bsePrice) : null;
       };
 
-      await db.sql`
+      await getDatabase().sql`
         INSERT INTO market_quotes (name, price, day_pct, day_high, day_low, year_high, year_low, sma10, sma20, updated_at)
         VALUES (${name}, ${price}, ${num(d?.percentChange)}, ${num(d?.stockDetailsReusableData?.high)}, ${num(d?.stockDetailsReusableData?.low)}, ${num(d?.yearHigh)}, ${num(d?.yearLow)}, ${dma(10)}, ${dma(20)}, now())
         ON CONFLICT (name) DO UPDATE SET
@@ -290,7 +291,7 @@ async function syncQuotes(db: ReturnType<typeof getDatabase>, names: string[]): 
 
 // ─── Section: Sparklines ─────────────────────────────────────────────────
 
-async function syncSparklines(db: ReturnType<typeof getDatabase>, names: string[]): Promise<{ rows: number; errors: string[] }> {
+async function syncSparklines(names: string[]): Promise<{ rows: number; errors: string[] }> {
   const errors: string[] = [];
   let saved = 0;
 
@@ -304,7 +305,7 @@ async function syncSparklines(db: ReturnType<typeof getDatabase>, names: string[
         .filter((v: number | null): v is number => v !== null);
       if (closes.length < 2) return;
       const symbol = `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
-      await db.sql`
+      await getDatabase().sql`
         INSERT INTO stock_sparklines (symbol, closes, updated_at)
         VALUES (${symbol}, ${closes}, now())
         ON CONFLICT (symbol) DO UPDATE SET closes = excluded.closes, updated_at = excluded.updated_at
@@ -326,7 +327,7 @@ function isWeeklyNewsDayIST(): boolean {
   return istNow.getUTCDay() === 1; // Monday
 }
 
-async function syncNews(db: ReturnType<typeof getDatabase>, names: string[], force: boolean): Promise<{ rows: number; errors: string[]; skipped?: boolean }> {
+async function syncNews(names: string[], force: boolean): Promise<{ rows: number; errors: string[]; skipped?: boolean }> {
   if (!force && !isWeeklyNewsDayIST()) {
     return { rows: 0, errors: [], skipped: true };
   }
@@ -361,7 +362,7 @@ async function syncNews(db: ReturnType<typeof getDatabase>, names: string[], for
         const summary = n.summary ? String(n.summary).slice(0, 800) : null;
         const publishedAt = n.date || n.published_at || new Date().toISOString();
         try {
-          await db.sql`
+          await getDatabase().sql`
             INSERT INTO stock_news (symbol, url, title, source, sentiment, summary, published_at)
             VALUES (${symbol}, ${url}, ${title}, ${source}, ${sentiment}, ${summary}, ${publishedAt})
             ON CONFLICT (symbol, url) DO UPDATE SET
@@ -383,7 +384,7 @@ async function syncNews(db: ReturnType<typeof getDatabase>, names: string[], for
 
 // ─── Section: IPOs ───────────────────────────────────────────────────────
 
-async function syncIpos(db: ReturnType<typeof getDatabase>): Promise<{ rows: number; errors: string[] }> {
+async function syncIpos(): Promise<{ rows: number; errors: string[] }> {
   const errors: string[] = [];
   let allRows: any[] = [];
   try {
@@ -415,9 +416,9 @@ async function syncIpos(db: ReturnType<typeof getDatabase>): Promise<{ rows: num
   }
 
   try {
-    await db.sql`DELETE FROM market_ipos`;
+    await getDatabase().sql`DELETE FROM market_ipos`;
     for (const x of allRows) {
-      await db.sql`
+      await getDatabase().sql`
         INSERT INTO market_ipos (
           symbol, name, status, is_sme, additional_text, min_price, max_price, issue_price,
           listing_price, listing_gains, bidding_start_date, bidding_end_date, listing_date,
@@ -464,19 +465,29 @@ export default async (req: Request, _context: Context) => {
     }
   }
 
-  const db = getDatabase();
+  // Fetch a fresh db handle right before each section rather than reusing one
+  // instance across this whole ~8s+ run, out of caution. Note: writes here
+  // are correctly committed and immediately visible to a fresh connection
+  // within this same function — confirmed via a diagnostic read-back during
+  // investigation. There is, however, a separate and significant (10-20+ min)
+  // delay before writes made by this Background Function become visible to
+  // the Next.js API routes (a different Netlify function context) reading
+  // the same tables — most likely a Netlify DB/Neon cross-function
+  // replication characteristic, not something fixable here. Irrelevant for
+  // the once-daily cron; matters only if manually testing a sync and
+  // expecting the dashboard to reflect it within seconds.
   const started = Date.now();
   const report: Record<string, any> = {};
 
-  try { report.indices = await syncIndices(db); } catch (e) { report.indices = { error: String(e) }; }
-  try { report.ipos = await syncIpos(db); } catch (e) { report.ipos = { error: String(e) }; }
+  try { report.indices = await syncIndices(); } catch (e) { report.indices = { error: String(e) }; }
+  try { report.ipos = await syncIpos(); } catch (e) { report.ipos = { error: String(e) }; }
 
   let names: string[] = [];
-  try { names = await loadStockNames(db); } catch (e) { report.stockNames = { error: String(e) }; }
+  try { names = await loadStockNames(); } catch (e) { report.stockNames = { error: String(e) }; }
 
-  try { report.quotes = await syncQuotes(db, names); } catch (e) { report.quotes = { error: String(e) }; }
-  try { report.sparklines = await syncSparklines(db, names); } catch (e) { report.sparklines = { error: String(e) }; }
-  try { report.news = await syncNews(db, names, forceNews); } catch (e) { report.news = { error: String(e) }; }
+  try { report.quotes = await syncQuotes(names); } catch (e) { report.quotes = { error: String(e) }; }
+  try { report.sparklines = await syncSparklines(names); } catch (e) { report.sparklines = { error: String(e) }; }
+  try { report.news = await syncNews(names, forceNews); } catch (e) { report.news = { error: String(e) }; }
 
   report.elapsed_ms = Date.now() - started;
   report.indianapi_keys_configured = INDIANAPI_KEYS.length;

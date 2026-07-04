@@ -54,25 +54,52 @@ export type IpoRow = {
   total_subscription_rate: number | null; document_url: string | null; updated_at: string;
 };
 
+// Postgres `numeric` columns come back from the driver as strings (to avoid
+// float precision loss), not JS numbers — even though our TypeScript types
+// above say `number`. Every numeric field read from the DB must be coerced
+// here, at the source, so no frontend consumer can call .toFixed()/do
+// arithmetic on a string and crash (this caused a real production bug: a
+// stock card's live day_pct being a string broke .toFixed() on the
+// Dashboard's High Conviction banner).
+function n(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const num = Number(v);
+  return Number.isFinite(num) ? num : null;
+}
+
 export async function getIndices(): Promise<Record<string, IndexRow>> {
-  const rows = await db().sql`SELECT * FROM market_indices` as unknown as IndexRow[];
-  return Object.fromEntries(rows.map((r) => [r.key, r]));
+  const rows = await db().sql`SELECT * FROM market_indices` as unknown as any[];
+  return Object.fromEntries(rows.map((r) => [r.key, {
+    key: r.key, price: n(r.price) ?? 0, change_pct: n(r.change_pct) ?? 0, updated_at: r.updated_at,
+  } as IndexRow]));
 }
 
 export async function getQuotes(): Promise<Record<string, QuoteRow>> {
-  const rows = await db().sql`SELECT * FROM market_quotes` as unknown as QuoteRow[];
-  return Object.fromEntries(rows.map((r) => [r.name, r]));
+  const rows = await db().sql`SELECT * FROM market_quotes` as unknown as any[];
+  return Object.fromEntries(rows.map((r) => [r.name, {
+    name: r.name, price: n(r.price) ?? 0, day_pct: n(r.day_pct),
+    day_high: n(r.day_high), day_low: n(r.day_low),
+    year_high: n(r.year_high), year_low: n(r.year_low),
+    sma10: n(r.sma10), sma20: n(r.sma20), updated_at: r.updated_at,
+  } as QuoteRow]));
 }
 
 export async function getSparklines(): Promise<Record<string, number[]>> {
-  const rows = await db().sql`SELECT symbol, closes FROM stock_sparklines` as unknown as SparkRow[];
-  return Object.fromEntries(rows.map((r) => [r.symbol, r.closes]));
+  const rows = await db().sql`SELECT symbol, closes FROM stock_sparklines` as unknown as any[];
+  return Object.fromEntries(rows.map((r) => [r.symbol, (r.closes || []).map((c: unknown) => n(c) ?? 0)]));
 }
 
 export async function getIpos(): Promise<IpoRow[]> {
-  return (await db().sql`
+  const rows = await db().sql`
     SELECT * FROM market_ipos ORDER BY status ASC, listing_date DESC NULLS LAST LIMIT 120
-  `) as unknown as IpoRow[];
+  ` as unknown as any[];
+  return rows.map((r) => ({
+    ...r,
+    min_price: n(r.min_price), max_price: n(r.max_price), issue_price: n(r.issue_price),
+    listing_price: n(r.listing_price), listing_gains: n(r.listing_gains),
+    lot_size: n(r.lot_size), min_bid_quantity: n(r.min_bid_quantity),
+    total_subscription_rate: n(r.total_subscription_rate),
+  } as IpoRow));
 }
 
 export async function getNews(symbol: string): Promise<NewsRow[]> {
