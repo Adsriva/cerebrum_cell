@@ -8,6 +8,12 @@
 // commodities) and summarises news through NVIDIA NIM, then writes
 // everything to the market tables via Netlify DB (Postgres).
 //
+// Before doing any work, checks whether NSE is actually open today (not a
+// weekend, not an NSE-declared trading holiday via /api/holiday-master) and
+// skips the whole run if closed — no point burning indianapi.in/NVIDIA
+// quota refreshing data the exchange itself isn't updating. Pass
+// ?force_sync=true to bypass this for manual testing on a closed day.
+//
 // Env vars required (Netlify → Site configuration → Environment variables):
 //   INDIANAPI_KEYS   — comma-separated x-api-key values for stock.indianapi.in.
 //                      Round-robined with auto-failover on 429/401/403.
@@ -128,24 +134,68 @@ function capBucket(mcapCr: number): string {
 
 // ─── Section: Indices ────────────────────────────────────────────────────
 
-async function fetchNseAllIndices(): Promise<any[]> {
-  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const NSE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+async function nseCookieJar(): Promise<string> {
   const home = await fetch("https://www.nseindia.com/", {
-    headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.5" },
+    headers: { "User-Agent": NSE_UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.5" },
   });
   const setCookie = home.headers.get("set-cookie") || "";
-  const cookieJar = setCookie.split(/,(?=\s*\w+=)/).map((c) => c.split(";")[0].trim()).filter(Boolean).join("; ");
-  const res = await fetch("https://www.nseindia.com/api/allIndices", {
+  return setCookie.split(/,(?=\s*\w+=)/).map((c) => c.split(";")[0].trim()).filter(Boolean).join("; ");
+}
+
+async function nseFetch(path: string): Promise<any> {
+  const cookieJar = await nseCookieJar();
+  const res = await fetch(`https://www.nseindia.com${path}`, {
     headers: {
-      "User-Agent": UA,
+      "User-Agent": NSE_UA,
       "Accept": "application/json",
       "Referer": "https://www.nseindia.com/",
       "Cookie": cookieJar,
     },
   });
-  if (!res.ok) throw new Error(`NSE allIndices ${res.status}`);
-  const data = await res.json();
+  if (!res.ok) throw new Error(`NSE ${path} ${res.status}`);
+  return res.json();
+}
+
+async function fetchNseAllIndices(): Promise<any[]> {
+  const data = await nseFetch("/api/allIndices");
   return Array.isArray(data?.data) ? data.data : [];
+}
+
+// ─── Market-holiday check ─────────────────────────────────────────────────
+// Skips the whole sync (indices/gainers/quotes/sparklines/news) on weekends
+// and NSE-declared trading holidays, so it doesn't burn indianapi.in/NVIDIA
+// quota writing stale data when the exchange is closed. Fails OPEN (assumes
+// market is open) if the NSE holiday API itself is unreachable, so a
+// transient NSE outage doesn't silently skip an entire trading day forever.
+function istTodayParts(): { y: number; mon: string; d: number; dow: number } {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return { y: ist.getUTCFullYear(), mon: MONTHS[ist.getUTCMonth()], d: ist.getUTCDate(), dow: ist.getUTCDay() };
+}
+
+async function isMarketOpenToday(): Promise<{ open: boolean; reason: string }> {
+  const { y, mon, d, dow } = istTodayParts();
+  if (dow === 0 || dow === 6) return { open: false, reason: "weekend" };
+
+  try {
+    const data = await nseFetch("/api/holiday-master?type=trading");
+    // "CM" = Capital Market (equity cash segment) — the one that governs
+    // stock trading. Other segments (CD/currency, FO/derivatives, COM/
+    // commodities, etc.) have their own holiday lists that don't always
+    // match CM's, so checking all segments blended together would produce
+    // false positives (skipping a day equities are actually open).
+    const cmHolidays: any[] = Array.isArray(data?.CM) ? data.CM : [];
+    const todayStr = `${String(d).padStart(2, "0")}-${mon}-${y}`;
+    const hit = cmHolidays.find((h: any) => String(h?.tradingDate || "").trim() === todayStr);
+    if (hit) return { open: false, reason: hit.description || "NSE trading holiday" };
+    return { open: true, reason: "" };
+  } catch (e) {
+    console.error("[market-sync-background] holiday check failed, assuming market open:", (e as Error).message);
+    return { open: true, reason: "" };
+  }
 }
 
 async function syncIndices(db: ReturnType<typeof getDatabase>): Promise<{ rows: number; errors: string[] }> {
@@ -482,8 +532,19 @@ export default async (req: Request, _context: Context) => {
     return;
   }
 
+  const url = new URL(req.url);
+  const forceNews = url.searchParams.get("force_news") === "true";
+  const forceSync = url.searchParams.get("force_sync") === "true";
+
+  if (!forceSync) {
+    const market = await isMarketOpenToday();
+    if (!market.open) {
+      console.log(`[market-sync-background] skipped — market closed (${market.reason})`);
+      return;
+    }
+  }
+
   const db = getDatabase();
-  const forceNews = new URL(req.url).searchParams.get("force_news") === "true";
   const started = Date.now();
   const report: Record<string, any> = {};
 

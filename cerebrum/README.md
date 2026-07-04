@@ -29,7 +29,7 @@ Nothing in this schema has RLS or a public REST layer — the database is only e
 ## Market-data sync
 
 - `netlify/functions/market-sync-scheduler.mts` — Scheduled Function (`schedule: "30 10 * * *"`, i.e. 10:30 UTC = 4 PM IST daily). 30-second execution limit, so all it does is fire the background function and return.
-- `netlify/functions/market-sync-background.mts` — Background Function (15-minute limit). Does the actual work: NSE India cookie handshake for real index levels, indianapi.in for gainers/quotes/sparklines/IPOs/news (3 rotating keys via `INDIANAPI_KEYS`), NVIDIA NIM for weekly news sentiment (only runs on Mondays IST, or with `?force_news=true`).
+- `netlify/functions/market-sync-background.mts` — Background Function (15-minute limit). First checks whether NSE is actually open today (skips weekends and NSE-declared trading holidays via `/api/holiday-master` — no indianapi.in/NVIDIA calls at all on a closed day, use `?force_sync=true` to bypass for manual testing). If open, does the actual work: NSE India cookie handshake for real index levels, indianapi.in for gainers/quotes/sparklines/IPOs/news (3 rotating keys via `INDIANAPI_KEYS`), NVIDIA NIM for weekly news sentiment (only runs on Mondays IST, or with `?force_news=true`).
 
 Required env vars (Netlify → Site configuration → Environment variables):
 - `INDIANAPI_KEYS` — comma-separated x-api-key values for stock.indianapi.in
