@@ -1,7 +1,7 @@
 # Cerebrum
 
-Personal Indian-equities research notebook with live NSE data, top-gainer filter,
-AI verdicts/news, IPO live feed, ETF/MF tracking, and dark mode.
+Personal Indian-equities research notebook with live NSE data, AI verdicts/news,
+IPO live feed, ETF/MF tracking, and dark mode.
 
 This repo has the production Next.js app under [`cerebrum/`](cerebrum/) plus a
 standalone single-file React build ([`Cerebrum_StockNotebook.jsx`](Cerebrum_StockNotebook.jsx))

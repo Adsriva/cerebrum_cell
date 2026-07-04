@@ -1,10 +1,10 @@
 // Cerebrum — market-sync background function.
-// Ported from the old Supabase Deno Edge Function to a Netlify Background
-// Function (15-minute wall-clock limit — needed because the weekly news
-// section makes one NVIDIA call per stock, which a 30s Scheduled Function
-// could not fit). Triggered by market-sync-scheduler.mts.
+// A Netlify Background Function (15-minute wall-clock limit — needed
+// because the weekly news section makes one NVIDIA call per stock, which
+// a 30s Scheduled Function could not fit). Triggered by
+// market-sync-scheduler.mts.
 //
-// Pulls live NSE data from indianapi.in (LTP, gainers, historical, news,
+// Pulls live NSE data from indianapi.in (LTP, historical, news,
 // commodities) and summarises news through NVIDIA NIM, then writes
 // everything to the market tables via Netlify DB (Postgres).
 //
@@ -58,12 +58,6 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: nu
   return results;
 }
 const CONCURRENCY = 4;
-
-const GAINER_MIN_PCT = 4.0;
-const GAINER_MIN_MCAP_CR = 600;
-const GAINER_MIN_PRICE = 13;
-const GAINER_MIN_WEEK_VOL = 50_000;
-const GAINER_MAX_KEEP = 30;
 
 const INDEX_TILES: Array<{ key: string; nseSymbol: string }> = [
   { key: "NIFTY",     nseSymbol: "NIFTY 50" },
@@ -125,13 +119,6 @@ function num(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function capBucket(mcapCr: number): string {
-  if (mcapCr >= 100_000) return "Large Cap";
-  if (mcapCr >= 25_000)  return "Mid Cap";
-  if (mcapCr >= 5_000)   return "Small Cap";
-  return "Micro Cap";
-}
-
 // ─── Section: Indices ────────────────────────────────────────────────────
 
 const NSE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -164,7 +151,7 @@ async function fetchNseAllIndices(): Promise<any[]> {
 }
 
 // ─── Market-holiday check ─────────────────────────────────────────────────
-// Skips the whole sync (indices/gainers/quotes/sparklines/news) on weekends
+// Skips the whole sync (indices/quotes/sparklines/news) on weekends
 // and NSE-declared trading holidays, so it doesn't burn indianapi.in/NVIDIA
 // quota writing stale data when the exchange is closed. Fails OPEN (assumes
 // market is open) if the NSE holiday API itself is unreachable, so a
@@ -250,73 +237,6 @@ async function syncIndices(db: ReturnType<typeof getDatabase>): Promise<{ rows: 
     }
   }
   return { rows: rows.length, errors };
-}
-
-// ─── Section: Gainers ────────────────────────────────────────────────────
-
-async function syncGainers(db: ReturnType<typeof getDatabase>): Promise<{ rows: number; errors: string[] }> {
-  const errors: string[] = [];
-  let kept: any[] = [];
-
-  try {
-    const t = await indianApi("/trending");
-    const raw: any[] = t?.trending_stocks?.top_gainers ?? [];
-
-    const candidates = raw
-      .map((s) => ({
-        ticker_id: s.ticker_id,
-        symbol: (s.ric || "").replace(/\.[A-Z]{2,3}$/, "") || s.ticker_id,
-        company: s.company_name,
-        price: num(s.price),
-        pct: num(s.percent_change),
-        volume: num(s.volume),
-      }))
-      .filter((s) => s.pct !== null && s.pct >= GAINER_MIN_PCT && s.price !== null && s.price >= GAINER_MIN_PRICE && s.volume !== null && s.volume >= GAINER_MIN_WEEK_VOL);
-
-    const enriched = await mapLimit(candidates, CONCURRENCY, async (c) => {
-      try {
-        const d = await indianApi(`/stock?name=${encodeURIComponent(c.company)}`);
-        const mcap = num(d?.stockDetailsReusableData?.marketCap) ?? num(d?.companyProfile?.peerCompanyList?.[0]?.marketCap);
-        const sector = d?.industry || d?.companyProfile?.mgIndustry || "Unknown";
-        if (mcap !== null && mcap >= GAINER_MIN_MCAP_CR) {
-          return {
-            symbol: `NSE:${c.symbol}`,
-            name: c.company,
-            sector,
-            cap: capBucket(mcap),
-            price: c.price,
-            day_pct: c.pct,
-            week_avg_vol: Math.round(c.volume || 0),
-            mcap_cr: mcap,
-          };
-        }
-        return null;
-      } catch (e) {
-        errors.push(`gainer ${c.company}: ${(e as Error).message}`);
-        return null;
-      }
-    });
-    kept = enriched
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .slice(0, GAINER_MAX_KEEP)
-      .map((x, i) => ({ ...x, rank: i + 1 }));
-
-    await db.sql`DELETE FROM market_gainers`;
-    for (const g of kept) {
-      try {
-        await db.sql`
-          INSERT INTO market_gainers (symbol, name, sector, cap, price, day_pct, week_avg_vol, mcap_cr, rank, scan_ts)
-          VALUES (${g.symbol}, ${g.name}, ${g.sector}, ${g.cap}, ${g.price}, ${g.day_pct}, ${g.week_avg_vol}, ${g.mcap_cr}, ${g.rank}, now())
-        `;
-      } catch (e) {
-        errors.push(`insert gainer ${g.symbol}: ${(e as Error).message}`);
-      }
-    }
-  } catch (e) {
-    errors.push(`trending: ${(e as Error).message}`);
-  }
-
-  return { rows: kept.length, errors };
 }
 
 // ─── Section: Quotes (live price for every notebook stock) ──────────────
@@ -550,7 +470,6 @@ export default async (req: Request, _context: Context) => {
 
   try { report.indices = await syncIndices(db); } catch (e) { report.indices = { error: String(e) }; }
   try { report.ipos = await syncIpos(db); } catch (e) { report.ipos = { error: String(e) }; }
-  try { report.gainers = await syncGainers(db); } catch (e) { report.gainers = { error: String(e) }; }
 
   let names: string[] = [];
   try { names = await loadStockNames(db); } catch (e) { report.stockNames = { error: String(e) }; }

@@ -6,8 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Keys the auth route owns exclusively — never readable/writable through
-// this general-purpose endpoint (mirrors the old Supabase RLS carve-out
-// for notebook_password).
+// this general-purpose endpoint.
 const RESTRICTED_KEYS = new Set(["notebook_password"]);
 
 export async function GET(req: Request) {

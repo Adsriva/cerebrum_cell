@@ -32,11 +32,6 @@ export async function setNotebookValue(key: string, value: any): Promise<void> {
 }
 
 export type IndexRow = { key: string; price: number; change_pct: number; updated_at: string };
-export type GainerRow = {
-  symbol: string; name: string; sector: string; cap: string;
-  price: number; day_pct: number; week_avg_vol: number; mcap_cr: number;
-  rank: number; scan_ts: string;
-};
 export type SparkRow = { symbol: string; closes: number[]; updated_at: string };
 export type NewsRow = {
   symbol: string; url: string; title: string; source: string;
@@ -62,10 +57,6 @@ export type IpoRow = {
 export async function getIndices(): Promise<Record<string, IndexRow>> {
   const rows = await db().sql`SELECT * FROM market_indices` as unknown as IndexRow[];
   return Object.fromEntries(rows.map((r) => [r.key, r]));
-}
-
-export async function getGainers(): Promise<GainerRow[]> {
-  return (await db().sql`SELECT * FROM market_gainers ORDER BY rank ASC LIMIT 50`) as unknown as GainerRow[];
 }
 
 export async function getQuotes(): Promise<Record<string, QuoteRow>> {

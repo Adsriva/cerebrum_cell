@@ -1,6 +1,6 @@
 # Cerebrum — Stock Idea Notebook
 
-Personal Indian-equities research notebook with live NSE data, top-gainer filter, AI verdicts/news, and dark mode. Free-hosted entirely on Netlify.
+Personal Indian-equities research notebook with live NSE data, AI verdicts/news, and dark mode. Free-hosted entirely on Netlify.
 
 ## Stack
 
@@ -22,14 +22,14 @@ Note: `npm run dev` alone has **no working database** — Netlify DB only exists
 
 ## Database schema
 
-Migrations live in `netlify/database/migrations/`. Netlify applies them automatically immediately before a deploy is published — no manual `psql` step. See `netlify/database/migrations/20260704120000_initial_schema/migration.sql` for the full schema: `notebook_store`, `market_indices`, `market_gainers`, `stock_sparklines`, `stock_news`, `market_quotes`, `market_ipos`.
+Migrations live in `netlify/database/migrations/`. Netlify applies them automatically immediately before a deploy is published — no manual `psql` step. See `netlify/database/migrations/20260704120000_initial_schema/migration.sql` for the full schema: `notebook_store`, `market_indices`, `stock_sparklines`, `stock_news`, `market_quotes`, `market_ipos`.
 
 Nothing in this schema has RLS or a public REST layer — the database is only ever reachable from server-side code (Next.js API routes under `app/api/*`, and the two Netlify Functions), never directly from the browser.
 
 ## Market-data sync
 
 - `netlify/functions/market-sync-scheduler.mts` — Scheduled Function (`schedule: "30 10 * * *"`, i.e. 10:30 UTC = 4 PM IST daily). 30-second execution limit, so all it does is fire the background function and return.
-- `netlify/functions/market-sync-background.mts` — Background Function (15-minute limit). First checks whether NSE is actually open today (skips weekends and NSE-declared trading holidays via `/api/holiday-master` — no indianapi.in/NVIDIA calls at all on a closed day, use `?force_sync=true` to bypass for manual testing). If open, does the actual work: NSE India cookie handshake for real index levels, indianapi.in for gainers/quotes/sparklines/IPOs/news (3 rotating keys via `INDIANAPI_KEYS`), NVIDIA NIM for weekly news sentiment (only runs on Mondays IST, or with `?force_news=true`).
+- `netlify/functions/market-sync-background.mts` — Background Function (15-minute limit). First checks whether NSE is actually open today (skips weekends and NSE-declared trading holidays via `/api/holiday-master` — no indianapi.in/NVIDIA calls at all on a closed day, use `?force_sync=true` to bypass for manual testing). If open, does the actual work: NSE India cookie handshake for real index levels, indianapi.in for quotes/sparklines/IPOs/news (3 rotating keys via `INDIANAPI_KEYS`), NVIDIA NIM for weekly news sentiment (only runs on Mondays IST, or with `?force_news=true`).
 
 Required env vars (Netlify → Site configuration → Environment variables):
 - `INDIANAPI_KEYS` — comma-separated x-api-key values for stock.indianapi.in
@@ -42,17 +42,6 @@ To trigger a sync manually for testing:
 curl -X POST 'https://YOUR-SITE.netlify.app/.netlify/functions/market-sync-background' \
   -H 'X-Sync-Secret: <your SYNC_TRIGGER_SECRET>'
 ```
-
-## Top Gainer filter
-
-`market-sync-background.mts` enforces these rules:
-
-- 1-day change ≥ **4 %**
-- Market cap ≥ **₹600 Cr**
-- Current price ≥ **₹13**
-- Day volume ≥ **50,000**
-
-Adjust the constants near the top of the file and redeploy.
 
 ## Deploy (Netlify)
 

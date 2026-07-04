@@ -1,12 +1,13 @@
--- Cerebrum schema for Netlify DB (Postgres). Replaces the Supabase tables
--- one-for-one, minus market_sectors (only consumer was the sectoral
--- heatmap, which has been removed from the app).
+-- Cerebrum schema for Netlify DB (Postgres). Does not include
+-- market_sectors (only consumer was the sectoral heatmap) or
+-- market_gainers (only consumer was the Gainers section) — both features
+-- have been removed from the app.
 --
--- No RLS here — unlike Supabase's anon-key+REST model, nothing in this
--- schema is ever reachable directly from the browser. Every read/write
--- goes through a Next.js API route or a Netlify Function, both of which
--- hold the only Postgres connection string (server-side only, injected
--- automatically by Netlify DB). The browser never sees a DB credential.
+-- No RLS here — nothing in this schema is ever reachable directly from
+-- the browser. Every read/write goes through a Next.js API route or a
+-- Netlify Function, both of which hold the only Postgres connection
+-- string (server-side only, injected automatically by Netlify DB). The
+-- browser never sees a DB credential.
 
 create table if not exists notebook_store (
   key text primary key,
@@ -19,19 +20,6 @@ create table if not exists market_indices (
   price numeric,
   change_pct numeric,
   updated_at timestamptz default now()
-);
-
-create table if not exists market_gainers (
-  symbol text primary key,
-  name text,
-  sector text,
-  cap text,
-  price numeric,
-  day_pct numeric,
-  week_avg_vol bigint,
-  mcap_cr numeric,
-  rank int,
-  scan_ts timestamptz default now()
 );
 
 create table if not exists stock_sparklines (

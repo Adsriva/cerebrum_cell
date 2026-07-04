@@ -3,11 +3,6 @@
 // talks to the database directly and never holds a DB credential.
 
 export type IndexRow = { key: string; price: number; change_pct: number; updated_at: string };
-export type GainerRow = {
-  symbol: string; name: string; sector: string; cap: string;
-  price: number; day_pct: number; week_avg_vol: number; mcap_cr: number;
-  rank: number; scan_ts: string;
-};
 export type SparkRow = { symbol: string; closes: number[]; updated_at: string };
 export type NewsRow = {
   symbol: string; url: string; title: string; source: string;
@@ -72,15 +67,6 @@ export async function fetchIndices(): Promise<Record<string, IndexRow>> {
     return res.ok ? await res.json() : {};
   } catch {
     return {};
-  }
-}
-
-export async function fetchGainers(): Promise<GainerRow[]> {
-  try {
-    const res = await fetch("/api/market/gainers", { cache: "no-store" });
-    return res.ok ? await res.json() : [];
-  } catch {
-    return [];
   }
 }
 

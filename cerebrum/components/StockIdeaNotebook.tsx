@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useContext, createContext 
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import {
   sbGet, sbSet,
-  fetchIndices, fetchGainers, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
+  fetchIndices, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
 } from "@/lib/data";
 import { callVerdict as llmVerdict, callNewsSummary as llmNewsSummary } from "@/lib/llm";
 import { loginWithPassword, verifyMasterPassword, changeNotebookPassword } from "@/lib/auth";
@@ -420,13 +420,10 @@ function genChart(name) {
   for(let i=0;i<30;i++){p=Math.max(p*(0.97+rng()*0.065),5);data.push({v:+p.toFixed(2)});}
   return data;
 }
-// ─── GROWW LIVE DATA ─────────────────────────────────────────────────────
-// Fetched via Groww MCP · Jun 23, 2026 · 11:24 IST
-
-const GROWW_DATA_TS = 'Jun 23, 2026 · 11:24 IST';
-
-// Live prices from Groww:get_ltp for watchlist stocks
-const GROWW_SNAPSHOT = {
+// ─── DEMO QUOTE FALLBACK ──────────────────────────────────────────────────
+// Static placeholder prices used only when a stock has no live row in
+// market_quotes yet (e.g. just added, before the next sync runs).
+const DEMO_QUOTE_FALLBACK = {
   'Amber':            {px:7839,   chg:-0.85, dayH:7960,  dayL:7825,  live:true},
   'Techno Electric':  {px:1092,   chg:-0.19, dayH:1108,  dayL:1087.5,live:true},
   'Wabag':            {px:2065.1, chg:0.16,  dayH:2086,  dayL:2036.1,live:true},
@@ -442,58 +439,10 @@ const GROWW_SNAPSHOT = {
   'Dee Development':  {px:660,    chg:-2.53, dayH:690,   dayL:647,   live:true},
 };
 
-// Top 20 NSE gainers · live from Groww:fetch_market_movers · Jun 23, 2026
-const GROWW_TOP_GAINERS = [
-  {rank:1,  name:'Zydus Lifesciences',  sym:'NSE:ZYDUSLIFE', sector:'Healthcare',  cap:'Large Cap', px:1124.0, chg:3.55, dayH:1124.5, dayL:1087.3},
-  {rank:2,  name:'Lodha Developers',    sym:'NSE:LODHA',     sector:'Real Estate', cap:'Large Cap', px:958.7,  chg:3.46, dayH:968.6,  dayL:926.0},
-  {rank:3,  name:'Cipla',               sym:'NSE:CIPLA',     sector:'Healthcare',  cap:'Large Cap', px:1455.9, chg:2.84, dayH:1461.0, dayL:1418.8},
-  {rank:4,  name:'Sun Pharma',          sym:'NSE:SUNPHARMA', sector:'Healthcare',  cap:'Large Cap', px:1895.7, chg:1.76, dayH:1902.4, dayL:1863.5},
-  {rank:5,  name:'Asian Paints',        sym:'NSE:ASIANPAINT',sector:'Consumer Discretionary',cap:'Large Cap',px:2690.2,chg:1.48,dayH:2695.4,dayL:2650.1},
-  {rank:6,  name:'Shriram Finance',     sym:'NSE:SHRIRAMFIN',sector:'Finance',     cap:'Large Cap', px:1006.5, chg:1.37, dayH:1007.7, dayL:984.5},
-  {rank:7,  name:'Torrent Pharma',      sym:'NSE:TORNTPHARM',sector:'Healthcare',  cap:'Large Cap', px:4512.5, chg:1.25, dayH:4566.8, dayL:4460.1},
-  {rank:8,  name:'HDFC AMC',            sym:'NSE:HDFCAMC',   sector:'Finance',     cap:'Large Cap', px:2721.6, chg:1.18, dayH:2725.0, dayL:2656.0},
-  {rank:9,  name:'Cholamandalam',       sym:'NSE:CHOLAFIN',  sector:'Finance',     cap:'Large Cap', px:1739.0, chg:1.18, dayH:1740.0, dayL:1714.8},
-  {rank:10, name:'ICICI Bank',          sym:'NSE:ICICIBANK', sector:'Finance',     cap:'Large Cap', px:1367.5, chg:1.12, dayH:1368.9, dayL:1354.2},
-  {rank:11, name:'Tata Consumer',       sym:'NSE:TATACONSUM',sector:'FMCG',        cap:'Large Cap', px:1125.3, chg:1.11, dayH:1126.7, dayL:1113.7},
-  {rank:12, name:'DLF',                 sym:'NSE:DLF',       sector:'Real Estate', cap:'Large Cap', px:634.5,  chg:1.10, dayH:636.4,  dayL:624.5},
-  {rank:13, name:"Divi's Labs",         sym:'NSE:DIVISLAB',  sector:'Healthcare',  cap:'Large Cap', px:6859.0, chg:1.05, dayH:6887.5, dayL:6775.0},
-  {rank:14, name:"Dr Reddy's",          sym:'NSE:DRREDDY',   sector:'Healthcare',  cap:'Large Cap', px:1304.2, chg:1.05, dayH:1329.5, dayL:1294.9},
-  {rank:15, name:'Britannia',           sym:'NSE:BRITANNIA', sector:'FMCG',        cap:'Large Cap', px:5268.0, chg:0.97, dayH:5275.5, dayL:5196.0},
-  {rank:16, name:'Pidilite',            sym:'NSE:PIDILITIND',sector:'Chemicals',   cap:'Large Cap', px:1587.1, chg:0.95, dayH:1599.3, dayL:1562.7},
-  {rank:17, name:'L&T',                 sym:'NSE:LT',        sector:'Construction',cap:'Large Cap', px:4238.9, chg:0.89, dayH:4242.4, dayL:4204.1},
-  {rank:18, name:'Cummins India',       sym:'NSE:CUMMINSIND',sector:'Industrial Manufacturing',cap:'Large Cap',px:5815.0,chg:0.88,dayH:5834.5,dayL:5781.0},
-  {rank:19, name:'Axis Bank',           sym:'NSE:AXISBANK',  sector:'Finance',     cap:'Large Cap', px:1369.7, chg:0.82, dayH:1371.9, dayL:1356.5},
-  {rank:20, name:'Bajaj Finserv',       sym:'NSE:BAJAJFINSV',sector:'Finance',     cap:'Large Cap', px:1796.4, chg:0.80, dayH:1798.9, dayL:1780.7},
-];
-
-// IPO live data from Groww:fetch_ipo_listings · Jun 23, 2026
-const GROWW_IPO_OPEN = [
-  {id:'go1', name:'Turtlemint Fintech Solutions', issuePrice:152, minPrice:144, maxPrice:152, closeDate:'2026-06-23', sub:0.54, isSme:false, notes:'Fintech insurance distribution platform. Closes today.'},
-  {id:'go2', name:'Advit Jewels',                 issuePrice:138, minPrice:130, maxPrice:138, closeDate:'2026-06-25', sub:1.6,  isSme:false, notes:'Jewellery manufacturer. Open till Jun 25.'},
-  {id:'go3', name:'Waterways Leisure Tourism',    issuePrice:808, minPrice:769, maxPrice:808, closeDate:'2026-06-25', sub:0.04, isSme:false, notes:'Cordelia Cruises operator. Low subscription so far.'},
-  {id:'go4', name:'CSM Technologies',             issuePrice:113, minPrice:107, maxPrice:113, closeDate:'2026-06-29', sub:0,    isSme:false, notes:'IT services company. Opens Jun 24. Pre-apply open.'},
-];
-const GROWW_IPO_UPCOMING_LISTING = [
-  {id:'gu1', name:'Avience Biomedicals',  issuePrice:208, listingDate:'2026-06-25', sub:352.97, isSme:true,  listingReturn:null},
-  {id:'gu2', name:'Clay Craft India',     issuePrice:203, listingDate:'2026-06-24', sub:95.29,  isSme:true,  listingReturn:null},
-  {id:'gu3', name:'Leapfrog Engineering', issuePrice:23,  listingDate:'2026-06-24', sub:2.6,    isSme:true,  listingReturn:null},
-  {id:'gu4', name:'Riyaasat Lifestyle',   issuePrice:108, listingDate:'2026-06-25', sub:0.18,   isSme:true,  listingReturn:null},
-];
-const GROWW_IPO_RECENTLY_LISTED = [
-  {id:'gr1', name:'Horizon Reclaim (India)',   issuePrice:103, listingPrice:151,   listingDate:'2026-06-19', listingReturn:46.6,  sub:235.86, isSme:true},
-  {id:'gr2', name:'Susan Electricals India',  issuePrice:127, listingPrice:186,   listingDate:'2026-06-18', listingReturn:46.46, sub:191.07, isSme:true},
-  {id:'gr3', name:'CMR Green Technologies',   issuePrice:192, listingPrice:268,   listingDate:'2026-06-10', listingReturn:39.58, sub:28.92,  isSme:false},
-  {id:'gr4', name:'Merritronix',              issuePrice:149, listingPrice:283.1, listingDate:'2026-06-08', listingReturn:90.0,  sub:288.28, isSme:true},
-];
-const GROWW_IPO_PIPELINE = [
-  'NSE','Reliance JIO','SBI Mutual Fund','Zepto','Razorpay','Moneyview',
-  'Manipal Health','Hero Fincorp','CarDekho','Haldiram\'s','Flipkart','PhonePe','OYO','boAt',
-];
-
 // ── Live quote context: per-stock price from market_quotes (indianapi.in
-// via the market-sync Edge Function, synced daily 4PM IST). Falls back to
-// the old static GROWW_SNAPSHOT demo data when a stock has no live row yet
-// (e.g. just added, before the next sync runs). ──
+// via netlify/functions/market-sync-background). Falls back to
+// DEMO_QUOTE_FALLBACK when a stock has no live row yet (e.g. just added,
+// before the next sync runs). ──
 const QuoteContext = createContext<Record<string, any>>({});
 
 function useMarketData(stockName) {
@@ -512,7 +461,7 @@ function useMarketData(stockName) {
       loading: false,
     };
   }
-  const data = GROWW_SNAPSHOT[stockName] || null;
+  const data = DEMO_QUOTE_FALLBACK[stockName] || null;
   return { data, loading: false };
 }
 
@@ -581,7 +530,7 @@ function MiniChart({name, pos, closes}: {name: string; pos: boolean; closes?: nu
   );
 }
 
-// Tiny inline sparkline used in compact rows (gainers, dashboard banners).
+// Tiny inline sparkline used in compact rows (dashboard banners).
 function Sparkline({closes, positive}: {closes?: number[]; positive: boolean}) {
   if (!closes || closes.length < 2) return <div className="w-[60px] h-[20px]"/>;
   const col = positive ? '#22c55e' : '#ef4444';
@@ -2273,193 +2222,6 @@ function SectorsView({sectorNotes, sectorTags, onSave, onTag}) {
   );
 }
 
-
-// ─── LIVE GAINERS FETCH (market_gainers, filled by market-sync-background) ──
-
-async function fetchGainersLive() {
-  const rows = await fetchGainers();
-  return rows.map((g) => ({
-    rank: g.rank,
-    name: g.name,
-    sym: g.symbol,
-    sector: g.sector,
-    cap: g.cap,
-    px: Number(g.price),
-    chg: Number(g.day_pct),
-    vol: Number(g.week_avg_vol),
-    mktcap_cr: Number(g.mcap_cr),
-    scan_ts: g.scan_ts,
-  }));
-}
-
-// ─── GAINERS VIEW ─────────────────────────────────────────────────────────
-
-function GainersView({stocks, onAdd, onDel, activeTab}: any) {
-  const [gainers, setGainers] = useState<any[]>(GROWW_TOP_GAINERS);
-  const [syncing, setSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState(GROWW_DATA_TS);
-
-  const loadGainersLive = async () => {
-    setSyncing(true);
-    try {
-      const fresh = await fetchGainersLive();
-      if (fresh?.length) {
-        setGainers(fresh);
-        const ts = fresh[0]?.scan_ts ? new Date(fresh[0].scan_ts).toLocaleString('en-IN',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'}) : 'just now';
-        setLastSync(ts);
-      }
-    } catch { }
-    setSyncing(false);
-  };
-
-  useEffect(() => { loadGainersLive(); }, []);
-  const syncNow = loadGainersLive;
-
-  const fvol2 = (n: number)=>{ if(!n) return '—'; if(n>=1e7) return `${(n/1e7).toFixed(1)}Cr`; if(n>=1e5) return `${(n/1e5).toFixed(1)}L`; return n.toLocaleString('en-IN'); };
-  // Build a name→id map so the per-row Remove button can target the right notebook entry.
-  const nameToId = useMemo(() => {
-    const m: Record<string, string> = {};
-    Object.values(stocks).forEach((s: any) => { if (s && !s.arc && s.name) m[s.name] = s.id; });
-    return m;
-  }, [stocks]);
-  const allNames = new Set(Object.keys(nameToId));
-  const SECTOR_COL = {'Healthcare':'#10b981','Finance':'#3b82f6','Railways':'#6366f1','Aerospace & Defence':'#8b5cf6','Electric Equipment':'#f59e0b','Electronics':'#ec4899','Metal, Mineral & Mining':'#94a3b8','Real Estate':'#f97316','FMCG':'#22c55e','Chemicals':'#0ea5e9','Construction':'#84cc16','Industrial Manufacturing':'#a78bfa','Consumer Discretionary':'#fb923c'};
-
-  // Bucket the gainer's mcap into the notebook's cap labels.
-  const capBucket = (mcapCr: number): string => {
-    if (!mcapCr) return 'Small Cap';
-    if (mcapCr >= 100000) return 'Large Cap';
-    if (mcapCr >= 25000)  return 'Mid Cap';
-    if (mcapCr >= 5000)   return 'Small Cap';
-    return 'Micro Cap';
-  };
-
-  // Add the gainer to the notebook, prefilling sector/cap from live data.
-  // Default tab = whichever was last active; falls back to 'Swing'.
-  const addToNotebook = (g: any) => {
-    if (!onAdd || allNames.has(g.name)) return;
-    const id = `g_${Date.now()}_${(g.name||'').replace(/[^A-Za-z0-9]/g,'').slice(0,20)}`;
-    const tab = (activeTab && activeTab !== 'IPO') ? activeTab : 'Swing';
-    onAdd(id, {
-      id, name: g.name, sector: g.sector || 'Unknown', subSector: '',
-      cap: capBucket(g.mktcap_cr), src: [tab], st: 'New Idea',
-      notes: [], sc: { bq: 0, mq: 0, gv: 0, val: 0, ts: 0 },
-      arc: false, vd: null, news: null,
-    }, tab);
-  };
-
-  const removeFromNotebook = (g: any) => {
-    const id = nameToId[g.name];
-    if (id && onDel) onDel(id);
-  };
-
-  return (
-    <div className="p-4 pb-10 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg shadow-md" style={{background:'linear-gradient(135deg,#22c55e,#16a34a)'}}>🚀</div>
-            <div>
-              <div className="text-slate-800 dark:text-slate-100 font-bold text-sm">Top Gainer · Live Scan</div>
-              <div className="text-slate-400 text-[10px]">NSE · 1D&gt;4% · MCap&gt;₹600cr · 1W vol&gt;50k · Px&gt;₹13 · {lastSync}</div>
-            </div>
-          </div>
-        </div>
-        <button onClick={syncNow} disabled={syncing}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all border"
-          style={{background:'rgba(34,197,94,0.08)',borderColor:'rgba(34,197,94,0.25)',color:'#16a34a'}}>
-          {syncing ? <span className="animate-spin">↻</span> : '↻'} {syncing ? 'Loading…' : 'Refresh'}
-        </button>
-      </div>
-
-      {/* Desktop table */}
-      <div className="hidden md:block rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm bg-white dark:bg-slate-800">
-        <table className="w-full">
-          <thead>
-            <tr className="bg-slate-50 dark:bg-slate-900/60 border-b-2 border-slate-200 dark:border-slate-700">
-              {['#','Stock','Sector','Cap','Price','1D %','Volume','MCap (Cr)','Action'].map(h=>(
-                <th key={h} className="text-left px-3 py-2.5 text-[9px] text-slate-500 dark:text-slate-400 uppercase tracking-widest font-bold">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {gainers.map((g,i)=>{
-              const sc=SECTOR_COL[g.sector]||'#94a3b8';
-              const inNb = allNames.has(g.name);
-              return (
-                <tr key={g.rank}
-                  className={`border-b border-slate-100 dark:border-slate-700/50 ${i%2===0?'bg-white dark:bg-slate-800':'bg-slate-50/60 dark:bg-slate-800/50'} hover:bg-blue-50/40 dark:hover:bg-slate-700/40 transition-colors cursor-pointer group`}>
-                  <td className="px-3 py-2.5"><span className="text-[11px] text-slate-400 font-bold">{g.rank}</span></td>
-                  <td className="px-3 py-2.5">
-                    <div className="text-[12px] text-slate-800 dark:text-slate-100 font-bold">{g.name}</div>
-                    <div className="text-[9px] text-slate-400 dark:text-slate-500 font-mono">{g.sym}</div>
-                  </td>
-                  <td className="px-3 py-2.5"><span style={{color:sc,background:`${sc}12`,border:`1px solid ${sc}30`}} className="text-[9px] px-1.5 py-[2px] rounded-full font-semibold">{g.sector}</span></td>
-                  <td className="px-3 py-2.5"><span className="text-[9px] text-slate-500 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-1.5 py-[2px] rounded">{g.cap}</span></td>
-                  <td className="px-3 py-2.5"><span className="text-[12px] font-bold text-slate-800 dark:text-slate-100 font-mono">₹{g.px.toLocaleString('en-IN')}</span></td>
-                  <td className="px-3 py-2.5">
-                    <span style={{color:'#22c55e',background:'rgba(34,197,94,0.10)',border:'1px solid rgba(34,197,94,0.25)'}} className="text-[11px] px-2 py-[3px] rounded-full font-bold">▲ +{g.chg.toFixed(2)}%</span>
-                  </td>
-                  <td className="px-3 py-2.5"><span className="text-[11px] text-slate-600 dark:text-slate-300 font-mono">{g.vol ? fvol2(g.vol) : '—'}</span></td>
-                  <td className="px-3 py-2.5"><span className="text-[11px] text-slate-600 dark:text-slate-300 font-mono">{g.mktcap_cr ? g.mktcap_cr.toLocaleString('en-IN') : '—'}</span></td>
-                  <td className="px-3 py-2.5">
-                    {inNb ? (
-                      <button onClick={(e)=>{e.stopPropagation(); removeFromNotebook(g);}}
-                        title="Remove from notebook" className="text-[9px] font-bold px-2 py-[3px] rounded-full transition-all bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-400/30 hover:bg-red-100 dark:hover:bg-red-500/25">
-                        ✕ Remove
-                      </button>
-                    ) : (
-                      <button onClick={(e)=>{e.stopPropagation(); addToNotebook(g);}}
-                        title={`Add to ${activeTab||'Swing'} watchlist`} className="text-[9px] font-bold px-2 py-[3px] rounded-full transition-all bg-blue-600 hover:bg-blue-700 text-white shadow-sm">
-                        + Add
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Mobile cards */}
-      <div className="md:hidden space-y-2">
-        {gainers.map(g=>{
-          const sc=SECTOR_COL[g.sector]||'#94a3b8';
-          const inNb = allNames.has(g.name);
-          return (
-            <div key={g.rank} className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-3 shadow-sm">
-              <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[11px] sm:text-[10px] text-slate-400 font-bold w-6 flex-shrink-0">#{g.rank}</span>
-                  <div className="text-left min-w-0">
-                    <div className="text-[13px] sm:text-[12px] font-bold text-slate-800 dark:text-slate-100 truncate">{g.name}</div>
-                    <span style={{color:sc}} className="text-[10px] sm:text-[8px] font-semibold">{g.sector}</span>
-                    <span className="ml-1.5 text-[10px] sm:text-[8px] text-slate-500 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-1.5 py-[1px] rounded">{g.cap}</span>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[12px] font-bold text-slate-800 dark:text-slate-100 font-mono">₹{g.px.toLocaleString('en-IN')}</div>
-                  <span style={{color:'#22c55e'}} className="text-[11px] font-bold">▲ +{g.chg.toFixed(2)}%</span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between flex-wrap gap-y-1 text-[11px] sm:text-[9px] text-slate-400">
-                <span>Vol: {g.vol ? fvol2(g.vol) : '—'}</span>
-                <span>MCap: {g.mktcap_cr ? `₹${g.mktcap_cr.toLocaleString('en-IN')}Cr` : '—'}</span>
-                {inNb ? (
-                  <button onClick={()=>removeFromNotebook(g)} className="text-[11px] sm:text-[9px] font-bold px-3 py-1.5 sm:py-[3px] rounded-full bg-red-50 dark:bg-red-500/15 text-red-600 dark:text-red-300 border border-red-200 dark:border-red-400/30 min-h-[36px] sm:min-h-0">✕ Remove</button>
-                ) : (
-                  <button onClick={()=>addToNotebook(g)} className="text-[11px] sm:text-[9px] font-bold px-3 py-1.5 sm:py-[3px] rounded-full bg-blue-600 text-white shadow-sm min-h-[36px] sm:min-h-0">+ Add</button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // ─── DASHBOARD ────────────────────────────────────────────────────────────
 
 const MARKET_TILES = [
@@ -2543,7 +2305,7 @@ function ThemeToggle({mode, onToggle}: {mode: 'light'|'dark'; onToggle: () => vo
   );
 }
 
-function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, indexNotes, onSaveIndexNote, topGainers, onSelectStock, onNavGainers}: any) {
+function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, indexNotes, onSaveIndexNote, onSelectStock}: any) {
   const liveQuotes = useContext(QuoteContext);
   const all = Object.values(stocks).filter((s: any)=>!s.arc) as any[];
   const arc = Object.values(stocks).filter((s: any)=>s.arc).length;
@@ -2562,7 +2324,6 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
     </div>
   );
   const mx1=(bySect[0] as any)?.[1]||1, mx2=(bySrc[0] as any)?.[1]||1;
-  const gainersToShow = (topGainers && topGainers.length ? topGainers : GROWW_TOP_GAINERS).slice(0, 8);
   const fmtPrice = (p: number, curr: string) => curr==='$' ? `$${p.toLocaleString('en-US',{maximumFractionDigits:0})}` : `₹${p.toLocaleString('en-IN',{maximumFractionDigits:0})}`;
   const lastUpdated = marketData?.fetchedAt ? new Date(marketData.fetchedAt).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}) : null;
 
@@ -2590,10 +2351,10 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
         </div>
       </div>
 
-      {/* ── TWO GLASS BANNERS ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* ── HIGH CONVICTION BANNER ── */}
+      <div className="grid grid-cols-1 gap-4">
 
-        {/* Banner 1: High Conviction Ideas */}
+        {/* High Conviction Ideas */}
         <div style={{background:'linear-gradient(135deg,rgba(99,102,241,0.10),rgba(139,92,246,0.06))',border:'1px solid rgba(99,102,241,0.22)',backdropFilter:'blur(12px)'}} className="rounded-3xl p-4 shadow-lg">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -2610,7 +2371,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
             {hc.slice(0,5).map((s:any)=>{
               const tot=Math.round((Object.values(s.sc) as number[]).reduce((a:number,b:number)=>a+b,0)/5*10);
               const lq = liveQuotes?.[s.name];
-              const kd = lq ? { px: lq.price, chg: lq.day_pct } : GROWW_SNAPSHOT[s.name];
+              const kd = lq ? { px: lq.price, chg: lq.day_pct } : DEMO_QUOTE_FALLBACK[s.name];
               return (
                 <button key={s.id} onClick={()=>onSelectStock(s.id)}
                   className="w-full flex items-center justify-between px-3 py-2.5 rounded-2xl transition-all hover:scale-[1.01] group bg-white/70 dark:bg-slate-800/60 border border-indigo-500/10 dark:border-indigo-400/15 shadow-sm">
@@ -2631,45 +2392,6 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
               );
             })}
             {hc.length>5 && <div className="text-[10px] text-center text-slate-400 pt-1">+{hc.length-5} more in watchlist</div>}
-          </div>
-        </div>
-
-        {/* Banner 2: Top Gainers (live from market_gainers, filtered) */}
-        <div style={{background:'linear-gradient(135deg,rgba(34,197,94,0.10),rgba(16,185,129,0.06))',border:'1px solid rgba(34,197,94,0.22)',backdropFilter:'blur(12px)'}} className="rounded-3xl p-4 shadow-lg">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div style={{background:'linear-gradient(135deg,#22c55e,#16a34a)'}} className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-base shadow-md">🚀</div>
-              <div>
-                <div className="text-[11px] font-black text-slate-800 dark:text-slate-100 uppercase tracking-wider">NSE Top Gainers</div>
-                <div className="text-[9px] text-slate-500">1D&gt;4% · MCap&gt;₹600cr · 1W vol&gt;50k · Px&gt;₹13</div>
-              </div>
-            </div>
-            <button onClick={onNavGainers} style={{color:'#22c55e',background:'rgba(34,197,94,0.10)',border:'1px solid rgba(34,197,94,0.25)'}} className="text-[10px] font-bold px-2 py-1 rounded-full hover:bg-emerald-100 transition-colors">View All →</button>
-          </div>
-          {gainersToShow.length === 0 && <div className="text-slate-400 text-xs text-center py-4">Waiting for first sync from GitHub Actions…</div>}
-          <div className="space-y-1.5">
-            {gainersToShow.map((g: any)=>{
-              const sc=({'Healthcare':'#10b981','Finance':'#3b82f6','Railways':'#6366f1','Aerospace & Defence':'#8b5cf6','Electric Equipment':'#f59e0b','Electronics':'#ec4899','Real Estate':'#f97316','FMCG':'#22c55e','Chemicals':'#0ea5e9','Construction':'#84cc16','Consumer Discretionary':'#fb923c','Industrial Manufacturing':'#a78bfa'} as any)[g.sector]||'#94a3b8';
-              const inNb = Object.values(stocks).some((s: any)=>s.name===g.name&&!s.arc);
-              return (
-                <button key={g.rank || g.sym} onClick={onNavGainers}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-2xl transition-all hover:scale-[1.01] bg-white/70 dark:bg-slate-800/60 border border-emerald-500/10 dark:border-emerald-400/15 shadow-sm">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-[9px] text-slate-400 font-bold w-4 text-right flex-shrink-0">{g.rank}</span>
-                    <div style={{background:sc}} className="w-1.5 h-5 rounded-full flex-shrink-0"/>
-                    <div className="min-w-0 text-left">
-                      <div className="text-[11px] text-slate-800 dark:text-slate-100 font-bold truncate">{g.name}</div>
-                      <span className="inline-block text-[10px] sm:text-[8px] text-slate-500 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 px-1.5 py-[1px] rounded mt-0.5">{g.cap}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <div className="text-[11px] font-bold text-slate-700 dark:text-slate-200 font-mono text-right">₹{(+g.px).toLocaleString('en-IN')}</div>
-                    <span style={{color:'#22c55e',background:'rgba(34,197,94,0.10)',border:'1px solid rgba(34,197,94,0.25)'}} className="text-[10px] font-bold px-1.5 py-[2px] rounded-full whitespace-nowrap">▲ +{(+g.chg).toFixed(2)}%</span>
-                    {inNb && <span className="text-[8px] text-blue-500 font-bold">✓</span>}
-                  </div>
-                </button>
-              );
-            })}
           </div>
         </div>
 
@@ -2741,7 +2463,6 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
   const NAV = [
     {id:'dashboard', l:'Dashboard',   e:'◈', isActive:view==='dashboard', action:()=>setView('dashboard')},
     {id:'watchlist', l:'Watchlist',   e:'◉', isActive:view==='watchlist', action:()=>setView('watchlist')},
-    {id:'gainers',   l:'Top Gainers', e:'🚀', isActive:view==='gainers',   action:()=>setView('gainers')},
     {id:'sectors',   l:'Sectors',     e:'📒', isActive:view==='sectors',   action:()=>setView('sectors')},
   ];
   return (
@@ -3185,7 +2906,6 @@ export default function StockIdeaNotebook() {
   const [mobMenu, setMobMenu] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | saving | saved | error
   // New live-data slices (populated by netlify/functions/market-sync-background)
-  const [topGainersData, setTopGainersData] = useState<any[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   const [indexNotes, setIndexNotes] = useState<Record<string, string>>({});
@@ -3239,12 +2959,7 @@ export default function StockIdeaNotebook() {
   useEffect(()=>{
     const loadMarket = async () => {
       try {
-        const [gnrs, sparks, qts] = await Promise.all([fetchGainers(), fetchSparklines(), fetchQuotes()]);
-        setTopGainersData(gnrs.map((g)=>({
-          rank: g.rank, name: g.name, sym: g.symbol, sector: g.sector, cap: g.cap,
-          px: Number(g.price), chg: Number(g.day_pct), vol: Number(g.week_avg_vol),
-          mktcap_cr: Number(g.mcap_cr),
-        })));
+        const [sparks, qts] = await Promise.all([fetchSparklines(), fetchQuotes()]);
         setSparklines(sparks);
         setQuotes(qts);
       } catch {}
@@ -3269,18 +2984,13 @@ export default function StockIdeaNotebook() {
     return ()=>clearTimeout(t);
   },[stocks, wl, watchItems, ipoList, sectorNotes, sectorTags, loaded]);
 
-  // ── Market data refresh (re-reads market_indices + gainers) ──
+  // ── Market data refresh (re-reads market_indices) ──
   const refreshMarket = async () => {
     if (marketLoading) return;
     setMarketLoading(true);
     try {
-      const [data, gnrs, qts] = await Promise.all([fetchMarketPrices(), fetchGainers(), fetchQuotes()]);
+      const [data, qts] = await Promise.all([fetchMarketPrices(), fetchQuotes()]);
       if (data?.prices) setMarketData(data);
-      setTopGainersData(gnrs.map((g)=>({
-        rank: g.rank, name: g.name, sym: g.symbol, sector: g.sector, cap: g.cap,
-        px: Number(g.price), chg: Number(g.day_pct), vol: Number(g.week_avg_vol),
-        mktcap_cr: Number(g.mcap_cr),
-      })));
       setQuotes(qts);
     } catch {}
     setMarketLoading(false);
@@ -3431,8 +3141,8 @@ export default function StockIdeaNotebook() {
           )}
         </div>
 
-        {/* Expert tab strip — visible on watchlist and gainers so users can switch between them without re-opening the sidebar */}
-        {(view==='watchlist' || view==='gainers')&&(
+        {/* Expert tab strip */}
+        {view==='watchlist'&&(
           <div className="flex items-center overflow-x-auto flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
         {/* Expert tabs */}
             {TABS.filter(t=>t!=='USA').map((t,i)=>{
@@ -3454,13 +3164,6 @@ export default function StockIdeaNotebook() {
                 </button>
               );
             })}
-            {/* Gainers tab */}
-            <button onClick={()=>navTo('gainers')}
-              style={view==='gainers'?{borderBottom:'2px solid #22c55e',color:'#22c55e',background:'rgba(34,197,94,0.06)'}:{borderBottom:'2px solid transparent'}}
-              className={`flex-shrink-0 flex items-center gap-1.5 px-3.5 py-2.5 text-[11px] font-bold transition-all hover:text-emerald-500 ${view==='gainers'?'':'text-slate-400 dark:text-slate-500'}`}>
-              🚀 GAINERS
-              <span style={view==='gainers'?{background:'rgba(34,197,94,0.2)',color:'#22c55e'}:undefined} className={`text-[9px] px-1.5 py-[2px] rounded-full font-bold ${view==='gainers'?'':'bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-400'}`}>20</span>
-            </button>
             {/* USA tab — always last */}
             {(()=>{
               const c='#f97316';
@@ -3481,8 +3184,7 @@ export default function StockIdeaNotebook() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           {view==='sectors'&&<div className="flex-1 overflow-hidden"><SectorsView sectorNotes={sectorNotes} sectorTags={sectorTags} onSave={saveSectorNote} onTag={saveSectorTag}/></div>}
-          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={refreshMarket} topGainers={topGainersData} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}} onNavGainers={()=>navTo('gainers')}/></div>}
-          {view==='gainers'&&<GainersView stocks={stocks} onAdd={addStock} onDel={delStock} activeTab={activeTab}/>}
+          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={refreshMarket} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}}/></div>}
           {view==='watchlist' && activeTab==='IPO' && <IpoView ipoList={ipoList} onAdd={addIpo} onDelete={deleteIpo} onUpdateSignal={updateIpoSignal}/>}
           {view==='watchlist' && activeTab!=='IPO' && (
             <div className="p-4 pb-10">
