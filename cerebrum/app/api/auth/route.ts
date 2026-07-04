@@ -1,43 +1,26 @@
 import { NextResponse } from "next/server";
+import { getNotebookValue, setNotebookValue } from "@/lib/db";
 
-// Edge runtime: this route holds the only code path that may compare against
+// Node runtime: @netlify/database's pg-backed driver needs Node, not edge.
+// This route holds the only code path that may compare against
 // MASTER_PASSWORD / the stored notebook password. The browser bundle never
 // sees either value — only an { ok: boolean } result.
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
 async function getStoredPassword(): Promise<string | null> {
-  if (!SB_URL || !SERVICE_KEY) return null;
   try {
-    const res = await fetch(
-      `${SB_URL}/rest/v1/notebook_store?key=eq.notebook_password&select=value`,
-      { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }, cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const rows = await res.json();
-    return rows?.[0]?.value ?? null;
+    const v = await getNotebookValue("notebook_password");
+    return typeof v === "string" ? v : null;
   } catch {
     return null;
   }
 }
 
 async function setStoredPassword(value: string): Promise<boolean> {
-  if (!SB_URL || !SERVICE_KEY) return false;
   try {
-    const res = await fetch(`${SB_URL}/rest/v1/notebook_store`, {
-      method: "POST",
-      headers: {
-        apikey: SERVICE_KEY,
-        Authorization: `Bearer ${SERVICE_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      },
-      body: JSON.stringify({ key: "notebook_password", value, updated_at: new Date().toISOString() }),
-    });
-    return res.ok;
+    await setNotebookValue("notebook_password", value);
+    return true;
   } catch {
     return false;
   }

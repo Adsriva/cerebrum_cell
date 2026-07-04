@@ -1,0 +1,121 @@
+// Browser-side fetch helpers. All reads/writes go through this app's own
+// Next.js API routes (backed by Netlify DB / Postgres) — the browser never
+// talks to the database directly and never holds a DB credential.
+
+export type IndexRow = { key: string; price: number; change_pct: number; updated_at: string };
+export type GainerRow = {
+  symbol: string; name: string; sector: string; cap: string;
+  price: number; day_pct: number; week_avg_vol: number; mcap_cr: number;
+  rank: number; scan_ts: string;
+};
+export type SparkRow = { symbol: string; closes: number[]; updated_at: string };
+export type NewsRow = {
+  symbol: string; url: string; title: string; source: string;
+  sentiment: "Positive" | "Neutral" | "Negative" | null;
+  summary: string | null; published_at: string;
+};
+export type QuoteRow = {
+  name: string; price: number; day_pct: number | null;
+  day_high: number | null; day_low: number | null;
+  year_high: number | null; year_low: number | null;
+  sma10: number | null; sma20: number | null; updated_at: string;
+};
+export type IpoRow = {
+  symbol: string;
+  name: string;
+  status: "upcoming" | "listed" | "active" | "closed" | "pre_apply" | string;
+  is_sme: boolean;
+  additional_text: string | null;
+  min_price: number | null;
+  max_price: number | null;
+  issue_price: number | null;
+  listing_price: number | null;
+  listing_gains: number | null;
+  bidding_start_date: string | null;
+  bidding_end_date: string | null;
+  listing_date: string | null;
+  allotment_date: string | null;
+  lot_size: number | null;
+  min_bid_quantity: number | null;
+  total_subscription_rate: number | null;
+  document_url: string | null;
+  updated_at: string;
+};
+
+export async function sbGet(key: string): Promise<any> {
+  try {
+    const res = await fetch(`/api/notebook?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+    if (!res.ok) return null;
+    const { value } = await res.json();
+    return value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function sbSet(key: string, value: any): Promise<boolean> {
+  try {
+    const res = await fetch("/api/notebook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchIndices(): Promise<Record<string, IndexRow>> {
+  try {
+    const res = await fetch("/api/market/indices", { cache: "no-store" });
+    return res.ok ? await res.json() : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchGainers(): Promise<GainerRow[]> {
+  try {
+    const res = await fetch("/api/market/gainers", { cache: "no-store" });
+    return res.ok ? await res.json() : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchQuotes(): Promise<Record<string, QuoteRow>> {
+  try {
+    const res = await fetch("/api/market/quotes", { cache: "no-store" });
+    return res.ok ? await res.json() : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchSparklines(): Promise<Record<string, number[]>> {
+  try {
+    const res = await fetch("/api/market/sparklines", { cache: "no-store" });
+    return res.ok ? await res.json() : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchIpos(): Promise<IpoRow[]> {
+  try {
+    const res = await fetch("/api/market/ipos", { cache: "no-store" });
+    return res.ok ? await res.json() : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchNews(symbol: string): Promise<NewsRow[]> {
+  try {
+    const res = await fetch(`/api/market/news?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" });
+    return res.ok ? await res.json() : [];
+  } catch {
+    return [];
+  }
+}

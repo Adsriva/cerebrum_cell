@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useContext, createContext } from "react";
-import { AreaChart, Area, ResponsiveContainer, Treemap } from "recharts";
+import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import {
   sbGet, sbSet,
-  fetchIndices, fetchSectors, fetchGainers, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
-} from "@/lib/supabase";
+  fetchIndices, fetchGainers, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
+} from "@/lib/data";
 import { callVerdict as llmVerdict, callNewsSummary as llmNewsSummary } from "@/lib/llm";
 import { loginWithPassword, verifyMasterPassword, changeNotebookPassword } from "@/lib/auth";
 
@@ -516,10 +516,10 @@ function useMarketData(stockName) {
   return { data, loading: false };
 }
 
-// ─── LIVE DATA: indices + verdict (Supabase + NVIDIA NIM via /api/llm) ───
+// ─── LIVE DATA: indices + verdict (Netlify DB + NVIDIA NIM via /api/llm) ───
 
 async function fetchMarketPrices() {
-  // Reads from Supabase market_indices table (populated by GitHub Actions sync_nse.py).
+  // Reads from market_indices table (populated by netlify/functions/market-sync-background).
   const rows = await fetchIndices();
   const prices: Record<string, { price: number; change: number }> = {};
   let latest: string | null = null;
@@ -560,7 +560,7 @@ function Ring({score, sz=40}) {
 
 function MiniChart({name, pos, closes}: {name: string; pos: boolean; closes?: number[]}) {
   const gid = useRef(uid()).current;
-  // Prefer real closes from Supabase stock_sparklines when available, fall back to deterministic synth.
+  // Prefer real closes from stock_sparklines when available, fall back to deterministic synth.
   const data = useMemo(() => {
     if (closes && closes.length >= 2) return closes.map((v) => ({ v }));
     return genChart(name);
@@ -1070,7 +1070,7 @@ const NEWS_CATS = {
 };
 
 async function fetchStockNews(stock: any) {
-  // Pull raw headlines from Supabase stock_news (populated by sync_news.py from NewsAPI),
+  // Pull raw headlines from stock_news (populated by market-sync-background),
   // then ask NVIDIA NIM (via /api/llm) to summarise into our existing shape.
   // sym field is the NSE symbol e.g. "NSE:ZYDUSLIFE" — fall back to name if missing.
   const symbol = stock.sym || `NSE:${(stock.name || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20)}`;
@@ -1790,7 +1790,7 @@ function LiveIposSection() {
                         {x.listing_date && <span>Listing: {fmtDate(x.listing_date)}</span>}
                         {x.total_subscription_rate != null && <span style={{color:x.total_subscription_rate>=1?'#22c55e':'#94a3b8'}} className="font-bold">Sub: {Number(x.total_subscription_rate).toFixed(2)}x</span>}
                       </div>
-                      {/* MY VIEW — saves to Supabase. Only "active" IPOs ever reach
+                      {/* MY VIEW — saves to notebook_store. Only "active" IPOs ever reach
                           this component now, so no status gate needed. */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                         <span className="text-[10px] sm:text-[8px] text-slate-400 dark:text-slate-500 uppercase tracking-widest font-bold mr-1 w-full sm:w-auto">My View</span>
@@ -2274,7 +2274,7 @@ function SectorsView({sectorNotes, sectorTags, onSave, onTag}) {
 }
 
 
-// ─── LIVE GAINERS FETCH (Supabase market_gainers, filled by sync_nse.py) ──
+// ─── LIVE GAINERS FETCH (market_gainers, filled by market-sync-background) ──
 
 async function fetchGainersLive() {
   const rows = await fetchGainers();
@@ -2299,7 +2299,7 @@ function GainersView({stocks, onAdd, onDel, activeTab}: any) {
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(GROWW_DATA_TS);
 
-  const loadFromSupabase = async () => {
+  const loadGainersLive = async () => {
     setSyncing(true);
     try {
       const fresh = await fetchGainersLive();
@@ -2312,8 +2312,8 @@ function GainersView({stocks, onAdd, onDel, activeTab}: any) {
     setSyncing(false);
   };
 
-  useEffect(() => { loadFromSupabase(); }, []);
-  const syncNow = loadFromSupabase;
+  useEffect(() => { loadGainersLive(); }, []);
+  const syncNow = loadGainersLive;
 
   const fvol2 = (n: number)=>{ if(!n) return '—'; if(n>=1e7) return `${(n/1e7).toFixed(1)}Cr`; if(n>=1e5) return `${(n/1e5).toFixed(1)}L`; return n.toLocaleString('en-IN'); };
   // Build a name→id map so the per-row Remove button can target the right notebook entry.
@@ -2532,85 +2532,6 @@ function IndexTile({tile, data, marketLoading, fmtPrice, note, onSaveNote}: any)
   );
 }
 
-// ── SECTORAL HEATMAP (Recharts Treemap) ──
-function SectoralHeatmap({sectors}: any) {
-  if (!sectors || sectors.length === 0) {
-    return (
-      <div className="rounded-2xl p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🔥</span>
-            <div className="text-[10px] text-slate-500 dark:text-slate-300 uppercase tracking-widest font-bold">Sectoral Heatmap</div>
-          </div>
-          <div className="text-[8px] text-slate-400">Waiting for first sync from GitHub Actions…</div>
-        </div>
-        <div className="h-40 flex items-center justify-center text-slate-300 text-xs">No data yet</div>
-      </div>
-    );
-  }
-  // Deeper, more saturated palette — drops the washed-out light shades that
-  // made white text unreadable. Every step is now WCAG-readable against #fff.
-  const sectorColor = (chg: number) => {
-    if (chg >= 2)  return '#14532d'; // deep green
-    if (chg >= 1)  return '#16a34a'; // green
-    if (chg >= 0)  return '#15803d'; // darker green (was pale #86efac)
-    if (chg >= -1) return '#b91c1c'; // darker red (was pale #fca5a5)
-    if (chg >= -2) return '#dc2626'; // red
-    return '#7f1d1d';                // deep red
-  };
-  // Use mcap_cr for size when available; otherwise equal weights.
-  const data = sectors.map((s: any) => ({
-    name: s.display_name || s.sector,
-    size: Math.max(1, Number(s.mcap_cr) || 100),
-    fill: sectorColor(Number(s.change_pct) || 0),
-    chg: Number(s.change_pct) || 0,
-  }));
-  // Custom cell — crisp text via paint-order stroke trick (draws a thin dark
-  // outline behind the fill so labels stay legible on any cell colour).
-  const Cell = (props: any) => {
-    const { x, y, width, height, name, fill, chg } = props;
-    // Recharts' Treemap also renders a synthetic full-size root node with no
-    // name/fill/chg of its own — skip it, only draw our actual leaf sectors.
-    if (chg === undefined || name === undefined) return null;
-    if (width < 28 || height < 18) return <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1}/>;
-    // Smarter font sizing: bigger floor for readability, capped to cell area.
-    const lblSize = Math.min(14, Math.max(10, Math.min(width / Math.max(6, name.length * 0.55), height / 4)));
-    const pctSize = Math.max(9, lblSize - 1);
-    // Truncate name only when the cell is genuinely too narrow.
-    const maxChars = Math.floor(width / (lblSize * 0.55));
-    const label = name.length > maxChars ? name.slice(0, maxChars - 1) + '…' : name;
-    const textStyle: React.CSSProperties = {
-      paintOrder: 'stroke',
-      stroke: 'rgba(0,0,0,0.55)',
-      strokeWidth: 2.5,
-      strokeLinejoin: 'round',
-    };
-    return (
-      <g>
-        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5}/>
-        <text x={x + width/2} y={y + height/2 - 3} textAnchor="middle" fill="#fff" fontSize={lblSize} fontWeight={800} style={textStyle}>{label}</text>
-        <text x={x + width/2} y={y + height/2 + lblSize + 2} textAnchor="middle" fill="#fff" fontSize={pctSize} fontWeight={700} style={textStyle}>{chg>=0?'+':''}{chg.toFixed(2)}%</text>
-      </g>
-    );
-  };
-  return (
-    <div className="rounded-2xl p-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">🔥</span>
-          <div className="text-[10px] text-slate-500 dark:text-slate-300 uppercase tracking-widest font-bold">Sectoral Heatmap</div>
-        </div>
-        <div className="text-[10px] sm:text-[8px] text-slate-400 dark:text-slate-500">From today's top gainers + losers · Size = MCap · Color = Day %</div>
-      </div>
-      <div style={{width: '100%', height: 280, fontSmooth: 'antialiased' as any, WebkitFontSmoothing: 'antialiased'}}>
-        <ResponsiveContainer width="100%" height="100%">
-          <Treemap data={data} dataKey="size" stroke="#fff" content={<Cell/>} isAnimationActive={false}/>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
 // ── THEME TOGGLE ──
 function ThemeToggle({mode, onToggle}: {mode: 'light'|'dark'; onToggle: () => void}) {
   return (
@@ -2622,7 +2543,7 @@ function ThemeToggle({mode, onToggle}: {mode: 'light'|'dark'; onToggle: () => vo
   );
 }
 
-function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, indexNotes, onSaveIndexNote, sectors, topGainers, onSelectStock, onNavGainers}: any) {
+function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, indexNotes, onSaveIndexNote, topGainers, onSelectStock, onNavGainers}: any) {
   const liveQuotes = useContext(QuoteContext);
   const all = Object.values(stocks).filter((s: any)=>!s.arc) as any[];
   const arc = Object.values(stocks).filter((s: any)=>s.arc).length;
@@ -2648,7 +2569,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
   return (
     <div className="max-w-5xl mx-auto space-y-5">
 
-      {/* ── MARKET TILES (live from Supabase market_indices) ── */}
+      {/* ── MARKET TILES (live from market_indices) ── */}
       <div>
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-2">
@@ -2656,7 +2577,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
             {lastUpdated && <span className="text-[10px] sm:text-[8px] text-slate-400 bg-slate-100 dark:bg-slate-800 px-1.5 py-[2px] rounded-full">Updated {lastUpdated} IST</span>}
           </div>
           <button onClick={onRefreshMarket} disabled={marketLoading}
-            title="Refresh from Supabase market_indices table"
+            title="Refresh from market_indices table"
             className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-blue-600 disabled:opacity-40 transition-colors border border-slate-200 dark:border-slate-700 px-2 py-1 rounded-lg hover:border-blue-300 bg-white dark:bg-slate-800">
             <span className={marketLoading?'animate-spin':''}>{marketLoading?'↻':'↻'}</span>
             <span>{marketLoading?'Fetching…':'Refresh'}</span>
@@ -2713,7 +2634,7 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
           </div>
         </div>
 
-        {/* Banner 2: Top Gainers (live from Supabase market_gainers, filtered) */}
+        {/* Banner 2: Top Gainers (live from market_gainers, filtered) */}
         <div style={{background:'linear-gradient(135deg,rgba(34,197,94,0.10),rgba(16,185,129,0.06))',border:'1px solid rgba(34,197,94,0.22)',backdropFilter:'blur(12px)'}} className="rounded-3xl p-4 shadow-lg">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -2753,9 +2674,6 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
         </div>
 
       </div>
-
-      {/* ── SECTORAL HEATMAP (live from Supabase market_sectors) ── */}
-      <SectoralHeatmap sectors={sectors}/>
 
       {/* ── REST OF DASHBOARD ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2925,8 +2843,7 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
   );
 }
 
-// ─── SUPABASE — sbGet / sbSet are now imported from @/lib/supabase ────────
-// (NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY env vars)
+// ─── DATA — sbGet / sbSet are now imported from @/lib/data ────────
 
 // ─── CHANGE PASSWORD MODAL ────────────────────────────────────────────────
 
@@ -3267,8 +3184,7 @@ export default function StockIdeaNotebook() {
   const [sideCol, setSideCol] = useState(false);
   const [mobMenu, setMobMenu] = useState(false);
   const [syncStatus, setSyncStatus] = useState('idle'); // idle | saving | saved | error
-  // New live-data slices (populated from Supabase by sync_nse.py)
-  const [sectorsData, setSectorsData] = useState<any[]>([]);
+  // New live-data slices (populated by netlify/functions/market-sync-background)
   const [topGainersData, setTopGainersData] = useState<any[]>([]);
   const [sparklines, setSparklines] = useState<Record<string, number[]>>({});
   const [quotes, setQuotes] = useState<Record<string, any>>({});
@@ -3298,7 +3214,7 @@ export default function StockIdeaNotebook() {
     preload();
   },[]);
 
-  // ── LOAD from Supabase on mount ──
+  // ── LOAD from Netlify DB on mount ──
   useEffect(()=>{
     const load = async () => {
       try {
@@ -3319,12 +3235,11 @@ export default function StockIdeaNotebook() {
     load();
   },[]);
 
-  // ── LIVE MARKET DATA: pull from Supabase tables (no auth gating) ──
+  // ── LIVE MARKET DATA: pull from Netlify DB tables (no auth gating) ──
   useEffect(()=>{
     const loadMarket = async () => {
       try {
-        const [secs, gnrs, sparks, qts] = await Promise.all([fetchSectors(), fetchGainers(), fetchSparklines(), fetchQuotes()]);
-        setSectorsData(secs);
+        const [gnrs, sparks, qts] = await Promise.all([fetchGainers(), fetchSparklines(), fetchQuotes()]);
         setTopGainersData(gnrs.map((g)=>({
           rank: g.rank, name: g.name, sym: g.symbol, sector: g.sector, cap: g.cap,
           px: Number(g.price), chg: Number(g.day_pct), vol: Number(g.week_avg_vol),
@@ -3337,7 +3252,7 @@ export default function StockIdeaNotebook() {
     loadMarket();
   },[]);
 
-  // ── SAVE to Supabase (debounced 800ms) ──
+  // ── SAVE to Netlify DB (debounced 800ms) ──
   useEffect(()=>{
     if (!loaded) return;
     setSyncStatus('saving');
@@ -3354,14 +3269,13 @@ export default function StockIdeaNotebook() {
     return ()=>clearTimeout(t);
   },[stocks, wl, watchItems, ipoList, sectorNotes, sectorTags, loaded]);
 
-  // ── Market data refresh (re-reads Supabase market_indices + sectors + gainers) ──
+  // ── Market data refresh (re-reads market_indices + gainers) ──
   const refreshMarket = async () => {
     if (marketLoading) return;
     setMarketLoading(true);
     try {
-      const [data, secs, gnrs, qts] = await Promise.all([fetchMarketPrices(), fetchSectors(), fetchGainers(), fetchQuotes()]);
+      const [data, gnrs, qts] = await Promise.all([fetchMarketPrices(), fetchGainers(), fetchQuotes()]);
       if (data?.prices) setMarketData(data);
-      setSectorsData(secs);
       setTopGainersData(gnrs.map((g)=>({
         rank: g.rank, name: g.name, sym: g.symbol, sector: g.sector, cap: g.cap,
         px: Number(g.price), chg: Number(g.day_pct), vol: Number(g.week_avg_vol),
@@ -3494,7 +3408,7 @@ export default function StockIdeaNotebook() {
             <span className="text-[8px] font-bold text-emerald-600 dark:text-emerald-300">🟢 Live</span>
             <span className="text-[8px] text-emerald-500 dark:text-emerald-400">NSE via indianapi.in</span>
           </div>
-          {/* Supabase sync indicator */}
+          {/* Netlify DB sync indicator */}
           <div className={`hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg border text-[8px] font-bold transition-all ${
             syncStatus==='saved' ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-300 dark:border-emerald-400/30 text-emerald-600 dark:text-emerald-300' :
             syncStatus==='saving' ? 'bg-blue-50 dark:bg-blue-500/10 border-blue-300 dark:border-blue-400/30 text-blue-600 dark:text-blue-300' :
@@ -3505,7 +3419,7 @@ export default function StockIdeaNotebook() {
             {syncStatus==='saved'&&'✓'}
             {syncStatus==='error'&&'✗'}
             {syncStatus==='idle'&&'☁'}
-            <span>{syncStatus==='saving'?'Saving…':syncStatus==='saved'?'Saved':syncStatus==='error'?'Sync Error':'Supabase'}</span>
+            <span>{syncStatus==='saving'?'Saving…':syncStatus==='saved'?'Saved':syncStatus==='error'?'Sync Error':'Netlify DB'}</span>
           </div>
           <button onClick={()=>setShowSearch(true)} className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100 text-[11px] transition-colors bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-slate-700">
             🔍<span className="hidden sm:inline font-medium">Search</span><span className="hidden sm:inline text-[9px] text-slate-400 dark:text-slate-400 bg-slate-200 dark:bg-slate-700 px-1 py-[2px] rounded font-mono">⌘K</span>
@@ -3567,7 +3481,7 @@ export default function StockIdeaNotebook() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           {view==='sectors'&&<div className="flex-1 overflow-hidden"><SectorsView sectorNotes={sectorNotes} sectorTags={sectorTags} onSave={saveSectorNote} onTag={saveSectorTag}/></div>}
-          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={refreshMarket} sectors={sectorsData} topGainers={topGainersData} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}} onNavGainers={()=>navTo('gainers')}/></div>}
+          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={refreshMarket} topGainers={topGainersData} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}} onNavGainers={()=>navTo('gainers')}/></div>}
           {view==='gainers'&&<GainersView stocks={stocks} onAdd={addStock} onDel={delStock} activeTab={activeTab}/>}
           {view==='watchlist' && activeTab==='IPO' && <IpoView ipoList={ipoList} onAdd={addIpo} onDelete={deleteIpo} onUpdateSignal={updateIpoSignal}/>}
           {view==='watchlist' && activeTab!=='IPO' && (
