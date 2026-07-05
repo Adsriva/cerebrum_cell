@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useContext, createContext 
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import {
   sbGet, sbSet,
-  fetchIndices, fetchQuotes, fetchSparklines, fetchNews, fetchIpos,
+  fetchIndices, fetchQuotes, fetchSparklines, fetchNews, fetchIpos, triggerSync, fetchOneStockNow,
 } from "@/lib/data";
 import { callVerdict as llmVerdict, callNewsSummary as llmNewsSummary } from "@/lib/llm";
 import { loginWithPassword, verifyMasterPassword, changeNotebookPassword } from "@/lib/auth";
@@ -1236,7 +1236,13 @@ function DetailPanel({stock, onClose, upd, onMove, onDup, onArc, onDel}: any) {
                   <button onClick={()=>{setShowMov('dup');setShowAct(false);}} className="w-full text-left px-3.5 py-2 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-slate-100 transition-colors">Duplicate to Tab</button>
                   <div className="my-0.5 border-t border-slate-100 dark:border-slate-700"/>
                   <button onClick={()=>{onArc(stock.id);onClose();}} className="w-full text-left px-3.5 py-2 text-[11px] text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 transition-colors">Archive</button>
-                  <button onClick={()=>{onDel(stock.id);onClose();}} className="w-full text-left px-3.5 py-2 text-[11px] text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors">Delete</button>
+                  <button onClick={()=>{
+                    const warning = stock.st === 'High Conviction'
+                      ? `"${stock.name}" is a High Conviction idea. Delete it permanently? This cannot be undone — consider Archive instead.`
+                      : `Delete "${stock.name}" permanently? This cannot be undone — consider Archive instead if you might want it back.`;
+                    if (!window.confirm(warning)) return;
+                    onDel(stock.id);onClose();
+                  }} className="w-full text-left px-3.5 py-2 text-[11px] text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors">Delete</button>
                 </div>
               )}
             </div>
@@ -2534,7 +2540,7 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
                       className="px-2.5 py-2 rounded-2xl cursor-pointer hover:shadow-sm transition-all group bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-200 dark:hover:border-blue-500/40">
                       <div className="flex items-center justify-between">
                         <div className="text-[11px] text-slate-700 dark:text-slate-200 font-semibold truncate flex-1 leading-tight">{wi.name}</div>
-                        <button onClick={e=>{e.stopPropagation();onRemoveWatch(wi.id);}}
+                        <button onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove "${wi.name}" from Watch Radar permanently?`)) onRemoveWatch(wi.id);}}
                           className="text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all ml-1 flex-shrink-0 leading-none">×</button>
                       </div>
                       {wt.length>0 && (
@@ -2881,7 +2887,12 @@ function CerebrumLogin({onUnlock}) {
 // ─── MAIN APP ─────────────────────────────────────────────────────────────
 
 export default function StockIdeaNotebook() {
-  const [authed, setAuthed]         = useState(false);
+  // Persist unlock across page refreshes within the same browser tab/session —
+  // only the password itself gates real access (checked server-side), this
+  // is purely a "don't make me re-type it on every reload" convenience.
+  const [authed, setAuthed]         = useState(() => {
+    try { return sessionStorage.getItem('cerebrum_authed') === '1'; } catch { return false; }
+  });
   const [loaded, setLoaded]         = useState(false);
   const [passLoaded, setPassLoaded]   = useState(false);
   const [marketData, setMarketData]   = useState<any>(null);
@@ -2996,6 +3007,18 @@ export default function StockIdeaNotebook() {
     setMarketLoading(false);
   };
 
+  // Manual "Refresh" button on the Dashboard — unlike the passive auto-load
+  // refresh above, this also kicks off a real market-sync-background run
+  // (bypassing the weekend/holiday market-closed gate, since the user is
+  // explicitly asking for fresh data right now) before re-reading the DB.
+  // Note: the sync itself can take a while, and its writes may take a while
+  // longer to become readable — clicking this won't show new numbers
+  // instantly, but it does queue a real, unblocked refresh.
+  const manualRefreshMarket = async () => {
+    triggerSync().catch(()=>{});
+    await refreshMarket();
+  };
+
   // Auto-refresh on load
   useEffect(()=>{
     if (!loaded) return;
@@ -3036,7 +3059,14 @@ export default function StockIdeaNotebook() {
     window.addEventListener('keydown',h); return()=>window.removeEventListener('keydown',h);
   },[]);
 
-  const addStock    = (id: string, data: any, tab: string) => { setStocks((p: any)=>({...p,[id]:data})); setWl((p: any)=>({...p,[tab]:Array.from(new Set([...(p[tab]||[]),id]))})); };
+  const addStock    = (id: string, data: any, tab: string) => {
+    setStocks((p: any)=>({...p,[id]:data}));
+    setWl((p: any)=>({...p,[tab]:Array.from(new Set([...(p[tab]||[]),id]))}));
+    // Fetch this stock's live quote + news from indianapi.in right away
+    // instead of waiting for the next scheduled sync. MF isn't a tradeable
+    // ticker on the stock API, so skip it (matches the sync's own filter).
+    if (data?.kind !== 'MF' && data?.name) fetchOneStockNow(data.name).catch(()=>{});
+  };
   const updStock    = (id: string, u: any)        => setStocks((p: any)=>({...p,[id]:{...p[id],...u}}));
   const delStock    = (id: string)          => { setStocks((p: any)=>{ const n={...p}; delete n[id]; return n; }); setWl((p: any)=>{ const n: any={}; TABS.forEach(t=>{n[t]=(p[t]||[]).filter((x: string)=>x!==id);}); return n; }); if(selId===id) setSelId(null); };
   const arcStock    = (id: string)          => { updStock(id,{arc:true}); if(selId===id) setSelId(null); };
@@ -3078,7 +3108,7 @@ export default function StockIdeaNotebook() {
       <div style={{width:32,height:32,borderRadius:'50%',border:'3px solid rgba(212,175,55,0.3)',borderTopColor:'#d4af37'}} className="animate-spin"/>
     </div>
   );
-  if (!authed) return <CerebrumLogin onUnlock={()=>setAuthed(true)}/>;
+  if (!authed) return <CerebrumLogin onUnlock={()=>{ try { sessionStorage.setItem('cerebrum_authed','1'); } catch {} setAuthed(true); }}/>;
 
   if (!loaded) return (
     <div style={{background:'#f8fafc'}} className="min-h-screen flex items-center justify-center">
@@ -3184,7 +3214,7 @@ export default function StockIdeaNotebook() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           {view==='sectors'&&<div className="flex-1 overflow-hidden"><SectorsView sectorNotes={sectorNotes} sectorTags={sectorTags} onSave={saveSectorNote} onTag={saveSectorTag}/></div>}
-          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={refreshMarket} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}}/></div>}
+          {view==='dashboard'&&<div className="p-4 md:p-6 pb-10"><DashboardView stocks={stocks} wl={wl} marketData={marketData} marketLoading={marketLoading} onRefreshMarket={manualRefreshMarket} indexNotes={indexNotes} onSaveIndexNote={saveIndexNote} onSelectStock={(id: string)=>{setSelId(id);navTo('watchlist');const t=TABS.find(t=>(wl[t]||[]).includes(id));if(t)setActiveTab(t);}}/></div>}
           {view==='watchlist' && activeTab==='IPO' && <IpoView ipoList={ipoList} onAdd={addIpo} onDelete={deleteIpo} onUpdateSignal={updateIpoSignal}/>}
           {view==='watchlist' && activeTab!=='IPO' && (
             <div className="p-4 pb-10">

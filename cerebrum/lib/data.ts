@@ -105,3 +105,33 @@ export async function fetchNews(symbol: string): Promise<NewsRow[]> {
     return [];
   }
 }
+
+// Kicks off a real market-sync-background run on demand (bypasses the
+// weekend/holiday market-closed gate — that's for the automatic daily cron
+// only). Fire-and-forget: the sync itself can take several seconds to
+// minutes and its results may take a while to become readable afterward,
+// so this just confirms the trigger was accepted, not that data updated.
+export async function triggerSync(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/sync/trigger", { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Fetches one stock's live quote + news from indianapi.in immediately,
+// instead of waiting for the next scheduled sync — called right after a
+// new stock is added so it shows real data right away.
+export async function fetchOneStockNow(name: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/stock/fetch-one", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

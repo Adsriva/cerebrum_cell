@@ -107,3 +107,32 @@ export async function getNews(symbol: string): Promise<NewsRow[]> {
     SELECT * FROM stock_news WHERE symbol = ${symbol} ORDER BY published_at DESC LIMIT 10
   `) as unknown as NewsRow[];
 }
+
+export async function upsertQuote(row: {
+  name: string; price: number | null; day_pct: number | null;
+  day_high: number | null; day_low: number | null;
+  year_high: number | null; year_low: number | null;
+  sma10: number | null; sma20: number | null;
+}): Promise<void> {
+  await db().sql`
+    INSERT INTO market_quotes (name, price, day_pct, day_high, day_low, year_high, year_low, sma10, sma20, updated_at)
+    VALUES (${row.name}, ${row.price}, ${row.day_pct}, ${row.day_high}, ${row.day_low}, ${row.year_high}, ${row.year_low}, ${row.sma10}, ${row.sma20}, now())
+    ON CONFLICT (name) DO UPDATE SET
+      price = excluded.price, day_pct = excluded.day_pct, day_high = excluded.day_high,
+      day_low = excluded.day_low, year_high = excluded.year_high, year_low = excluded.year_low,
+      sma10 = excluded.sma10, sma20 = excluded.sma20, updated_at = excluded.updated_at
+  `;
+}
+
+export async function upsertNewsRow(row: {
+  symbol: string; url: string; title: string; source: string;
+  sentiment: string | null; summary: string | null; published_at: string;
+}): Promise<void> {
+  await db().sql`
+    INSERT INTO stock_news (symbol, url, title, source, sentiment, summary, published_at)
+    VALUES (${row.symbol}, ${row.url}, ${row.title}, ${row.source}, ${row.sentiment}, ${row.summary}, ${row.published_at})
+    ON CONFLICT (symbol, url) DO UPDATE SET
+      title = excluded.title, source = excluded.source, sentiment = excluded.sentiment,
+      summary = excluded.summary, published_at = excluded.published_at
+  `;
+}
