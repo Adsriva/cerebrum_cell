@@ -15,6 +15,17 @@ function num(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Real NSE ticker from indianapi.in's own stock lookup (e.g. "RELIANCE" for
+// Reliance Industries), not a guessed/synthetic one — a plain uppercase-and-
+// strip of the company name frequently doesn't match the actual exchange
+// symbol at all. Falls back to that synthetic form only if the API response
+// is missing the real ticker for some reason.
+function symbolFor(name: string, stockDetail: any): string {
+  const real = stockDetail?.companyProfile?.exchangeCodeNse || stockDetail?.companyProfile?.exchangeCodeBse;
+  if (real) return `NSE:${String(real).toUpperCase()}`;
+  return `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
+}
+
 async function indianApi(path: string): Promise<any> {
   if (INDIANAPI_KEYS.length === 0) throw new Error("INDIANAPI_KEYS not configured");
   let lastErr = "";
@@ -78,7 +89,7 @@ export async function POST(req: Request) {
     // slow work) fills in sentiment for every stock, including this one.
     const recent: any[] = Array.isArray(d?.recentNews) ? d.recentNews.slice(0, 5) : [];
     if (recent.length > 0) {
-      const symbol = `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
+      const symbol = symbolFor(name, d);
 
       for (let i = 0; i < recent.length; i++) {
         const n = recent[i];

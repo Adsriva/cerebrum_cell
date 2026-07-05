@@ -1,18 +1,13 @@
 // Cerebrum — market-sync background function.
 // A Netlify Background Function (15-minute wall-clock limit — needed
 // because the weekly news section makes one NVIDIA call per stock, which
-// a 30s Scheduled Function could not fit). Triggered by
-// market-sync-scheduler.mts.
+// a 30s Scheduled Function could not fit). Triggered on demand by
+// /api/sync/trigger (the Dashboard's manual "Refresh" button) — there is
+// no automatic schedule; sync only happens when explicitly requested.
 //
 // Pulls live NSE data from indianapi.in (LTP, historical, news,
 // commodities) and summarises news through NVIDIA NIM, then writes
 // everything to the market tables via Netlify DB (Postgres).
-//
-// Before doing any work, checks whether NSE is actually open today (not a
-// weekend, not an NSE-declared trading holiday via /api/holiday-master) and
-// skips the whole run if closed — no point burning indianapi.in/NVIDIA
-// quota refreshing data the exchange itself isn't updating. Pass
-// ?force_sync=true to bypass this for manual testing on a closed day.
 //
 // Env vars required (Netlify → Site configuration → Environment variables):
 //   INDIANAPI_KEYS   — comma-separated x-api-key values for stock.indianapi.in.
@@ -20,7 +15,7 @@
 //   INDIANAPI_KEY    — legacy single-key fallback.
 //   NVIDIA_API_KEY   — Bearer token for build.nvidia.com NIM
 //   NVIDIA_MODEL     — optional, defaults to meta/llama-3.1-70b-instruct
-//   SYNC_TRIGGER_SECRET — shared secret; the scheduler sends it as
+//   SYNC_TRIGGER_SECRET — shared secret; /api/sync/trigger sends it as
 //                      X-Sync-Secret. Rejects any other caller, since this
 //                      background function has a public URL by default.
 //
@@ -119,6 +114,17 @@ function num(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Real NSE ticker from indianapi.in's own stock lookup (e.g. "RELIANCE" for
+// Reliance Industries), not a guessed/synthetic one — a plain uppercase-and-
+// strip of the company name (the old approach) frequently doesn't match the
+// actual exchange symbol at all. Falls back to that synthetic form only if
+// the API response is missing the real ticker for some reason.
+function symbolFor(name: string, stockDetail: any): string {
+  const real = stockDetail?.companyProfile?.exchangeCodeNse || stockDetail?.companyProfile?.exchangeCodeBse;
+  if (real) return `NSE:${String(real).toUpperCase()}`;
+  return `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
+}
+
 // ─── Section: Indices ────────────────────────────────────────────────────
 
 const NSE_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -148,41 +154,6 @@ async function nseFetch(path: string): Promise<any> {
 async function fetchNseAllIndices(): Promise<any[]> {
   const data = await nseFetch("/api/allIndices");
   return Array.isArray(data?.data) ? data.data : [];
-}
-
-// ─── Market-holiday check ─────────────────────────────────────────────────
-// Skips the whole sync (indices/quotes/sparklines/news) on weekends
-// and NSE-declared trading holidays, so it doesn't burn indianapi.in/NVIDIA
-// quota writing stale data when the exchange is closed. Fails OPEN (assumes
-// market is open) if the NSE holiday API itself is unreachable, so a
-// transient NSE outage doesn't silently skip an entire trading day forever.
-function istTodayParts(): { y: number; mon: string; d: number; dow: number } {
-  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const ist = new Date(Date.now() + IST_OFFSET_MS);
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return { y: ist.getUTCFullYear(), mon: MONTHS[ist.getUTCMonth()], d: ist.getUTCDate(), dow: ist.getUTCDay() };
-}
-
-async function isMarketOpenToday(): Promise<{ open: boolean; reason: string }> {
-  const { y, mon, d, dow } = istTodayParts();
-  if (dow === 0 || dow === 6) return { open: false, reason: "weekend" };
-
-  try {
-    const data = await nseFetch("/api/holiday-master?type=trading");
-    // "CM" = Capital Market (equity cash segment) — the one that governs
-    // stock trading. Other segments (CD/currency, FO/derivatives, COM/
-    // commodities, etc.) have their own holiday lists that don't always
-    // match CM's, so checking all segments blended together would produce
-    // false positives (skipping a day equities are actually open).
-    const cmHolidays: any[] = Array.isArray(data?.CM) ? data.CM : [];
-    const todayStr = `${String(d).padStart(2, "0")}-${mon}-${y}`;
-    const hit = cmHolidays.find((h: any) => String(h?.tradingDate || "").trim() === todayStr);
-    if (hit) return { open: false, reason: hit.description || "NSE trading holiday" };
-    return { open: true, reason: "" };
-  } catch (e) {
-    console.error("[market-sync-background] holiday check failed, assuming market open:", (e as Error).message);
-    return { open: true, reason: "" };
-  }
 }
 
 async function syncIndices(): Promise<{ rows: number; errors: string[] }> {
@@ -304,7 +275,10 @@ async function syncSparklines(names: string[]): Promise<{ rows: number; errors: 
         .map((v: any) => num(v?.[1]))
         .filter((v: number | null): v is number => v !== null);
       if (closes.length < 2) return;
-      const symbol = `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
+      // Cheap: hits the apiCache if syncQuotes already fetched this same
+      // stock's /stock?name=X moments earlier in this same run.
+      const detail = await indianApi(`/stock?name=${encodeURIComponent(name)}`).catch(() => null);
+      const symbol = symbolFor(name, detail);
       await getDatabase().sql`
         INSERT INTO stock_sparklines (symbol, closes, updated_at)
         VALUES (${symbol}, ${closes}, now())
@@ -339,7 +313,7 @@ async function syncNews(names: string[], force: boolean): Promise<{ rows: number
       const d = await indianApi(`/stock?name=${encodeURIComponent(name)}`);
       const recent: any[] = Array.isArray(d?.recentNews) ? d.recentNews.slice(0, 5) : [];
       if (recent.length === 0) return;
-      const symbol = `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
+      const symbol = symbolFor(name, d);
 
       let sentiments: Record<number, string> = {};
       if (NVIDIA_API_KEY && recent.length > 0) {
@@ -455,15 +429,6 @@ export default async (req: Request, _context: Context) => {
 
   const url = new URL(req.url);
   const forceNews = url.searchParams.get("force_news") === "true";
-  const forceSync = url.searchParams.get("force_sync") === "true";
-
-  if (!forceSync) {
-    const market = await isMarketOpenToday();
-    if (!market.open) {
-      console.log(`[market-sync-background] skipped — market closed (${market.reason})`);
-      return;
-    }
-  }
 
   // Fetch a fresh db handle right before each section rather than reusing one
   // instance across this whole ~8s+ run, out of caution. Note: writes here

@@ -2316,7 +2316,11 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
   const all = Object.values(stocks).filter((s: any)=>!s.arc) as any[];
   const arc = Object.values(stocks).filter((s: any)=>s.arc).length;
   const bySect = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.sector]=(m[s.sector]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
-  const bySrc  = useMemo(()=>{ const m: any={}; all.forEach(s=>s.src.forEach((x: string)=>{const k=TAB_FULL[x]||x;m[k]=(m[k]||0)+1;})); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
+  // Count each idea once, under its primary (first) tab only — a stock
+  // duplicated to a second tab (e.g. Swing + Long) still only has ONE
+  // idea, so this bar chart's total should match "By Sector" and the
+  // overall idea count instead of double-counting duplicated stocks.
+  const bySrc  = useMemo(()=>{ const m: any={}; all.forEach(s=>{const x=s.src?.[0];if(!x)return;const k=TAB_FULL[x]||x;m[k]=(m[k]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
   const bySt   = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.st]=(m[s.st]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
   const hc = all.filter((s:any)=>(Object.values(s.sc) as number[]).reduce((a:number,b:number)=>a+b,0)>25||s.st==='High Conviction');
   const recentNotes = useMemo(()=>{ const ns: any[]=[]; all.forEach(s=>s.notes.forEach((n: any)=>ns.push({...n,sn:s.name,sid:s.id}))); return ns.sort((a,b)=>b.id.localeCompare(a.id)).slice(0,5); },[all]);
@@ -2979,20 +2983,34 @@ export default function StockIdeaNotebook() {
   },[]);
 
   // ── SAVE to Netlify DB (debounced 800ms) ──
+  // Also flushes immediately (bypassing the 800ms debounce) the moment the
+  // tab is hidden/closed/refreshed — otherwise a change made right before a
+  // refresh (e.g. deleting a Watch Radar item, then reloading out of habit)
+  // can be lost: the debounce timer never fires, so the old pre-change data
+  // is still what's in the DB, and reloading brings that stale state back
+  // ("delete doesn't stick").
   useEffect(()=>{
     if (!loaded) return;
     setSyncStatus('saving');
+    const flush = () => Promise.all([
+      sbSet('stocks', stocks), sbSet('watchlists', wl), sbSet('watch_radar', watchItems),
+      sbSet('ipo_list', ipoList), sbSet('sector_notes', sectorNotes), sbSet('sector_tags', sectorTags),
+    ]);
     const t = setTimeout(async()=>{
       try {
-        await Promise.all([
-          sbSet('stocks', stocks), sbSet('watchlists', wl), sbSet('watch_radar', watchItems),
-          sbSet('ipo_list', ipoList), sbSet('sector_notes', sectorNotes), sbSet('sector_tags', sectorTags),
-        ]);
+        await flush();
         setSyncStatus('saved');
         setTimeout(()=>setSyncStatus('idle'), 2000);
       } catch { setSyncStatus('error'); }
     }, 800);
-    return ()=>clearTimeout(t);
+    const onHide = () => { if (document.visibilityState === 'hidden') flush().catch(()=>{}); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
+    return ()=>{
+      clearTimeout(t);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
+    };
   },[stocks, wl, watchItems, ipoList, sectorNotes, sectorTags, loaded]);
 
   // ── Market data refresh (re-reads market_indices) ──
@@ -3009,11 +3027,10 @@ export default function StockIdeaNotebook() {
 
   // Manual "Refresh" button on the Dashboard — unlike the passive auto-load
   // refresh above, this also kicks off a real market-sync-background run
-  // (bypassing the weekend/holiday market-closed gate, since the user is
-  // explicitly asking for fresh data right now) before re-reading the DB.
-  // Note: the sync itself can take a while, and its writes may take a while
-  // longer to become readable — clicking this won't show new numbers
-  // instantly, but it does queue a real, unblocked refresh.
+  // (there's no automatic schedule; this is the only way a sync happens)
+  // before re-reading the DB. Note: the sync itself can take a while, and
+  // its writes may take a while longer to become readable — clicking this
+  // won't show new numbers instantly, but it does queue a real sync.
   const manualRefreshMarket = async () => {
     triggerSync().catch(()=>{});
     await refreshMarket();

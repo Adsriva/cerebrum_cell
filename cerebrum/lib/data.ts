@@ -106,11 +106,11 @@ export async function fetchNews(symbol: string): Promise<NewsRow[]> {
   }
 }
 
-// Kicks off a real market-sync-background run on demand (bypasses the
-// weekend/holiday market-closed gate — that's for the automatic daily cron
-// only). Fire-and-forget: the sync itself can take several seconds to
-// minutes and its results may take a while to become readable afterward,
-// so this just confirms the trigger was accepted, not that data updated.
+// Kicks off a real market-sync-background run on demand — there's no
+// automatic schedule, this is the only way a sync ever runs. Fire-and-
+// forget: the sync itself can take several seconds to minutes and its
+// results may take a while to become readable afterward, so this just
+// confirms the trigger was accepted, not that data updated.
 export async function triggerSync(): Promise<boolean> {
   try {
     const res = await fetch("/api/sync/trigger", { method: "POST" });
