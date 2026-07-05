@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { upsertQuote, upsertNewsRow } from "@/lib/db";
-import { nvidiaChat, extractJsonFromText } from "@/lib/nvidia";
 
-// Node runtime: needs @netlify/database (pg-backed) and can run past 10s
-// for the NVIDIA sentiment call.
+// Node runtime: needs @netlify/database (pg-backed).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -72,22 +70,15 @@ export async function POST(req: Request) {
       report.quote = true;
     }
 
+    // Note: sentiment is intentionally left null here (not classified via
+    // NVIDIA) — that call alone can take 15-25s, which risked timing out
+    // this synchronous request on top of the indianapi.in fetch and DB
+    // writes. The next scheduled market-sync-background run (a Background
+    // Function with a 15-minute budget, built for exactly this kind of
+    // slow work) fills in sentiment for every stock, including this one.
     const recent: any[] = Array.isArray(d?.recentNews) ? d.recentNews.slice(0, 5) : [];
     if (recent.length > 0) {
       const symbol = `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
-
-      let sentiments: Record<number, string> = {};
-      if (process.env.NVIDIA_API_KEY) {
-        try {
-          const titles = recent.map((n: any, i: number) => `${i + 1}. ${n.title || n.headline || ""}`).join("\n");
-          const prompt = `Classify the sentiment of each headline for "${name}" stock. Return ONLY a JSON array of strings, one per headline, each EXACTLY one of "Positive", "Neutral", "Negative". No prose, just JSON.\n\nHeadlines:\n${titles}`;
-          const raw = await nvidiaChat(prompt, { maxTokens: 200 });
-          const arr = JSON.parse(extractJsonFromText(raw));
-          if (Array.isArray(arr)) arr.forEach((s, i) => (sentiments[i] = String(s)));
-        } catch (e: any) {
-          report.errors.push(`sentiment: ${e?.message}`);
-        }
-      }
 
       for (let i = 0; i < recent.length; i++) {
         const n = recent[i];
@@ -99,7 +90,7 @@ export async function POST(req: Request) {
             url: n.url || n.link || `${symbol}#${i}-${Date.now()}`,
             title,
             source: String(n.source || n.publisher || "Unknown").slice(0, 100),
-            sentiment: sentiments[i] || null,
+            sentiment: null,
             summary: n.summary ? String(n.summary).slice(0, 800) : null,
             published_at: n.date || n.published_at || new Date().toISOString(),
           });
