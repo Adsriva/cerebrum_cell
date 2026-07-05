@@ -114,13 +114,16 @@ export async function upsertQuote(row: {
   year_high: number | null; year_low: number | null;
   sma10: number | null; sma20: number | null;
 }): Promise<void> {
+  // DELETE + plain INSERT instead of ON CONFLICT DO UPDATE — the upsert
+  // form showed unpredictable, sometimes multi-minute delays before a
+  // write became visible to a subsequent read, in both this Next.js route
+  // and the market-sync-background Netlify Function; the delete-then-
+  // insert pattern (used by market_ipos throughout this whole project)
+  // has never shown that delay in testing.
+  await db().sql`DELETE FROM market_quotes WHERE name = ${row.name}`;
   await db().sql`
     INSERT INTO market_quotes (name, price, day_pct, day_high, day_low, year_high, year_low, sma10, sma20, updated_at)
     VALUES (${row.name}, ${row.price}, ${row.day_pct}, ${row.day_high}, ${row.day_low}, ${row.year_high}, ${row.year_low}, ${row.sma10}, ${row.sma20}, now())
-    ON CONFLICT (name) DO UPDATE SET
-      price = excluded.price, day_pct = excluded.day_pct, day_high = excluded.day_high,
-      day_low = excluded.day_low, year_high = excluded.year_high, year_low = excluded.year_low,
-      sma10 = excluded.sma10, sma20 = excluded.sma20, updated_at = excluded.updated_at
   `;
 }
 
