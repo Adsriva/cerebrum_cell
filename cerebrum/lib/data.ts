@@ -122,16 +122,35 @@ export async function triggerSync(): Promise<boolean> {
 
 // Fetches one stock's live quote + news from indianapi.in immediately,
 // instead of waiting for the next scheduled sync — called right after a
-// new stock is added so it shows real data right away.
-export async function fetchOneStockNow(name: string): Promise<boolean> {
+// new stock is added so it shows real data right away. Resolves the real
+// NSE ticker instantly from the local nse_equity_master mirror (falls back
+// to indianapi.in's own lookup, then a guessed symbol, only if not found
+// locally) — the returned `symbol` reflects whichever it used.
+export async function fetchOneStockNow(name: string): Promise<{ ok: boolean; symbol: string | null }> {
   try {
     const res = await fetch("/api/stock/fetch-one", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    return res.ok;
+    if (!res.ok) return { ok: false, symbol: null };
+    const data = await res.json();
+    return { ok: true, symbol: data?.symbol ?? null };
   } catch {
-    return false;
+    return { ok: false, symbol: null };
+  }
+}
+
+export type NseEquityMatch = { symbol: string; company_name: string; isin: string | null };
+
+// Instant autocomplete against the full NSE-listed universe (~2,400
+// companies) instead of a small hardcoded demo list.
+export async function searchNseEquities(query: string): Promise<NseEquityMatch[]> {
+  if (!query.trim()) return [];
+  try {
+    const res = await fetch(`/api/nse-master/search?q=${encodeURIComponent(query)}`, { cache: "no-store" });
+    return res.ok ? await res.json() : [];
+  } catch {
+    return [];
   }
 }

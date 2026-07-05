@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { upsertQuote, upsertNewsRow } from "@/lib/db";
+import { upsertQuote, upsertNewsRow, findNseSymbolByName } from "@/lib/db";
 
 // Node runtime: needs @netlify/database (pg-backed).
 export const runtime = "nodejs";
@@ -15,12 +15,13 @@ function num(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// Real NSE ticker from indianapi.in's own stock lookup (e.g. "RELIANCE" for
-// Reliance Industries), not a guessed/synthetic one — a plain uppercase-and-
-// strip of the company name frequently doesn't match the actual exchange
-// symbol at all. Falls back to that synthetic form only if the API response
-// is missing the real ticker for some reason.
-function symbolFor(name: string, stockDetail: any): string {
+// Real NSE ticker, resolved in priority order: (1) the local nse_equity_master
+// lookup already done above — instant, no external call; (2) indianapi.in's
+// own stock lookup (e.g. "RELIANCE" for Reliance Industries); (3) only as a
+// last resort, a guessed/synthetic symbol (plain uppercase-and-strip of the
+// company name), which frequently doesn't match the real exchange symbol.
+function symbolFor(name: string, stockDetail: any, localSymbol: string | null): string {
+  if (localSymbol) return `NSE:${localSymbol}`;
   const real = stockDetail?.companyProfile?.exchangeCodeNse || stockDetail?.companyProfile?.exchangeCodeBse;
   if (real) return `NSE:${String(real).toUpperCase()}`;
   return `NSE:${name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20)}`;
@@ -60,7 +61,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "INDIANAPI_KEYS not configured" }, { status: 500 });
   }
 
-  const report: Record<string, any> = { quote: false, news: 0, errors: [] as string[] };
+  const report: Record<string, any> = { quote: false, news: 0, symbol: null as string | null, errors: [] as string[] };
+
+  // Instant local ticker resolution — checked first, before any live
+  // indianapi.in call, against the full NSE-listed universe mirrored in
+  // nse_equity_master (~2,400 companies, refreshed via /api/nse-master/reload).
+  let localSymbol: string | null = null;
+  try {
+    localSymbol = await findNseSymbolByName(name);
+    if (localSymbol) report.symbol = `NSE:${localSymbol}`;
+  } catch (e: any) {
+    report.errors.push(`local symbol lookup: ${e?.message}`);
+  }
 
   try {
     const d = await indianApi(`/stock?name=${encodeURIComponent(name)}`);
@@ -89,7 +101,8 @@ export async function POST(req: Request) {
     // slow work) fills in sentiment for every stock, including this one.
     const recent: any[] = Array.isArray(d?.recentNews) ? d.recentNews.slice(0, 5) : [];
     if (recent.length > 0) {
-      const symbol = symbolFor(name, d);
+      const symbol = symbolFor(name, d, localSymbol);
+      report.symbol = symbol;
 
       for (let i = 0; i < recent.length; i++) {
         const n = recent[i];

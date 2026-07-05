@@ -139,3 +139,47 @@ export async function upsertNewsRow(row: {
       summary = excluded.summary, published_at = excluded.published_at
   `;
 }
+
+export type NseEquityRow = { symbol: string; company_name: string; isin: string | null };
+
+// Instant local ticker lookup — no external API call, no wait. Used for
+// autocomplete when adding a stock and as the first thing tried when
+// resolving a stock's real NSE symbol (falls back to indianapi.in's
+// per-stock lookup only if there's no local match).
+export async function searchNseEquityMaster(query: string, limit = 10): Promise<NseEquityRow[]> {
+  const q = `%${query.toLowerCase()}%`;
+  return (await db().sql`
+    SELECT symbol, company_name, isin FROM nse_equity_master
+    WHERE lower(company_name) LIKE ${q} OR lower(symbol) LIKE ${q}
+    ORDER BY company_name ASC LIMIT ${limit}
+  `) as unknown as NseEquityRow[];
+}
+
+export async function findNseSymbolByName(name: string): Promise<string | null> {
+  const q = name.toLowerCase();
+  const rows = (await db().sql`
+    SELECT symbol FROM nse_equity_master WHERE lower(company_name) = ${q} LIMIT 1
+  `) as unknown as { symbol: string }[];
+  if (rows[0]) return rows[0].symbol;
+  // Fall back to a "contains" match if there's no exact company-name hit.
+  const like = (await db().sql`
+    SELECT symbol FROM nse_equity_master WHERE lower(company_name) LIKE ${'%' + q + '%'} ORDER BY length(company_name) ASC LIMIT 1
+  `) as unknown as { symbol: string }[];
+  return like[0]?.symbol ?? null;
+}
+
+// Bulk-inserts in batches (via sql.values()) instead of one round trip per
+// row — ~2,400 individual INSERTs would take minutes and risk timing out
+// the request; a few hundred-row batches finish in seconds.
+export async function replaceNseEquityMaster(rows: NseEquityRow[]): Promise<number> {
+  await db().sql`DELETE FROM nse_equity_master`;
+  const BATCH = 300;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH);
+    const values = db().sql.values(chunk.map((r) => [r.symbol, r.company_name, r.isin, new Date().toISOString()]));
+    await db().sql`
+      INSERT INTO nse_equity_master (symbol, company_name, isin, updated_at) VALUES ${values}
+    `;
+  }
+  return rows.length;
+}

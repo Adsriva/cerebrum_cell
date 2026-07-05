@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useContext, createContext 
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import {
   sbGet, sbSet,
-  fetchIndices, fetchQuotes, fetchSparklines, fetchNews, fetchIpos, triggerSync, fetchOneStockNow,
+  fetchIndices, fetchQuotes, fetchSparklines, fetchNews, fetchIpos, triggerSync, fetchOneStockNow, searchNseEquities,
 } from "@/lib/data";
 import { callVerdict as llmVerdict, callNewsSummary as llmNewsSummary } from "@/lib/llm";
 import { loginWithPassword, verifyMasterPassword, changeNotebookPassword } from "@/lib/auth";
@@ -1197,11 +1197,32 @@ function NewsPanel({ stock, upd }: any) {
   );
 }
 
+// ─── CONFIRM MODAL ────────────────────────────────────────────────────────
+// A custom, in-app confirmation dialog — NOT window.confirm(). Native
+// confirm() is unreliable across mobile browsers, in-app webviews, and PWA
+// contexts (it can silently resolve false without ever showing anything to
+// the user), which made permanent-delete confirmations look like "delete
+// just doesn't work" on some devices.
+function ConfirmModal({message, confirmLabel='Delete', onConfirm, onCancel}: {message: string; confirmLabel?: string; onConfirm: () => void; onCancel: () => void}) {
+  return (
+    <div onClick={onCancel} style={{background:'rgba(10,10,10,0.55)', backdropFilter:'blur(4px)'}} className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
+      <div onClick={e=>e.stopPropagation()} className="w-full max-w-sm rounded-2xl shadow-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+        <div className="text-[13px] text-slate-700 dark:text-slate-200 mb-4 leading-relaxed">{message}</div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="px-4 py-2.5 sm:py-2 rounded-xl text-[12px] font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+          <button onClick={onConfirm} className="px-4 py-2.5 sm:py-2 rounded-xl text-[12px] font-semibold text-white bg-red-500 hover:bg-red-600 transition-colors">{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── DETAIL PANEL ─────────────────────────────────────────────────────────
 
 function DetailPanel({stock, onClose, upd, onMove, onDup, onArc, onDel}: any) {
   const [tab, setTab] = useState('notes');
   const [showAct, setShowAct] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   // false = panel closed; 'move' / 'dup' = panel open showing the relevant action's tab grid
   const [showMov, setShowMov] = useState<false | 'move' | 'dup'>(false);
   const { data: px, loading: pxLoading } = useMarketData(stock.name);
@@ -1236,14 +1257,17 @@ function DetailPanel({stock, onClose, upd, onMove, onDup, onArc, onDel}: any) {
                   <button onClick={()=>{setShowMov('dup');setShowAct(false);}} className="w-full text-left px-3.5 py-2 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-slate-900 dark:hover:text-slate-100 transition-colors">Duplicate to Tab</button>
                   <div className="my-0.5 border-t border-slate-100 dark:border-slate-700"/>
                   <button onClick={()=>{onArc(stock.id);onClose();}} className="w-full text-left px-3.5 py-2 text-[11px] text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/10 transition-colors">Archive</button>
-                  <button onClick={()=>{
-                    const warning = stock.st === 'High Conviction'
-                      ? `"${stock.name}" is a High Conviction idea. Delete it permanently? This cannot be undone — consider Archive instead.`
-                      : `Delete "${stock.name}" permanently? This cannot be undone — consider Archive instead if you might want it back.`;
-                    if (!window.confirm(warning)) return;
-                    onDel(stock.id);onClose();
-                  }} className="w-full text-left px-3.5 py-2 text-[11px] text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors">Delete</button>
+                  <button onClick={()=>{setConfirmDel(true);setShowAct(false);}} className="w-full text-left px-3.5 py-2 text-[11px] text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors">Delete</button>
                 </div>
+              )}
+              {confirmDel && (
+                <ConfirmModal
+                  message={stock.st === 'High Conviction'
+                    ? `"${stock.name}" is a High Conviction idea. Delete it permanently? This cannot be undone — consider Archive instead.`
+                    : `Delete "${stock.name}" permanently? This cannot be undone — consider Archive instead if you might want it back.`}
+                  onConfirm={()=>{setConfirmDel(false);onDel(stock.id);onClose();}}
+                  onCancel={()=>setConfirmDel(false)}
+                />
               )}
             </div>
             <button onClick={onClose} aria-label="Close detail panel" className="w-10 h-10 sm:w-7 sm:h-7 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100 transition-colors text-base sm:text-sm">✕</button>
@@ -1314,7 +1338,31 @@ function AddStockModal({activeTab, stocks, onAdd, onClose}) {
   const iRef = useRef(null);
   useEffect(()=>{ iRef.current?.focus(); },[]);
   const known = useMemo(()=>new Set(Object.values(stocks).map((s:any)=>s.name)),[stocks]);
-  const sugg = useMemo(()=>{ if (!q.trim()) return UNIVERSE.slice(0,10); const qq=q.toLowerCase(); return UNIVERSE.filter(x=>x.n.toLowerCase().includes(qq)).slice(0,10); },[q]);
+  // Instant local suggestions from the small hardcoded shortlist, while a
+  // debounced query against the full NSE-listed universe (~2,400 companies,
+  // via nse_equity_master) fills in — so typing an uncommon name still finds
+  // its real ticker instead of "Custom — will be added as entered".
+  const [nseSugg, setNseSugg] = useState<{n:string;s:string;sym?:string}[]>([]);
+  useEffect(()=>{
+    if (!q.trim() || tab==='MF') { setNseSugg([]); return; }
+    const t = setTimeout(async()=>{
+      const matches = await searchNseEquities(q.trim());
+      // No sector data in NSE's equity master (it's just symbol/name/ISIN) —
+      // leave sector blank for these; `sym` is the real ticker, shown as a
+      // preview badge, and kept OUT of the `s` field pick() writes into
+      // sector so it can't get mistaken for one.
+      setNseSugg(matches.map(m=>({n:m.company_name, s:'', sym:m.symbol})));
+    }, 250);
+    return ()=>clearTimeout(t);
+  },[q, tab]);
+  const sugg = useMemo(()=>{
+    const qq=q.trim().toLowerCase();
+    const local = qq ? UNIVERSE.filter(x=>x.n.toLowerCase().includes(qq)) : UNIVERSE.slice(0,10);
+    const seen = new Set(local.map(x=>x.n));
+    const merged = [...local] as {n:string;s:string;sym?:string}[];
+    for (const m of nseSugg) { if (!seen.has(m.n)) { merged.push(m); seen.add(m.n); } }
+    return merged.slice(0,10);
+  },[q, nseSugg]);
   // Sector-aware sub-sector suggestions: preset list first, then user-added ones
   const allSubSectors = useMemo(()=>Array.from(new Set(Object.values(stocks).map((s:any)=>s.subSector).filter(Boolean))).sort() as string[],[stocks]);
   const filteredSubSugg = useMemo(()=>{
@@ -1359,7 +1407,7 @@ function AddStockModal({activeTab, stocks, onAdd, onClose}) {
                 {sugg.map(u=>(
                   <button key={u.n} onClick={()=>pick(u)} className="w-full text-left px-3 py-2.5 hover:bg-blue-50 dark:hover:bg-slate-700 flex items-center justify-between transition-colors">
                     <span className="text-sm text-slate-800 dark:text-slate-100 font-medium">{u.n}</span>
-                    <div className="flex items-center gap-1.5">{known.has(u.n)&&<span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">✓ tracked</span>}<span className="text-[9px] text-slate-400 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-1.5 py-[2px] rounded">{u.s}</span></div>
+                    <div className="flex items-center gap-1.5">{known.has(u.n)&&<span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">✓ tracked</span>}<span className="text-[9px] text-slate-400 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-1.5 py-[2px] rounded font-mono">{u.sym || u.s}</span></div>
                   </button>
                 ))}
               </div>
@@ -2316,11 +2364,22 @@ function DashboardView({stocks, wl, marketData, marketLoading, onRefreshMarket, 
   const all = Object.values(stocks).filter((s: any)=>!s.arc) as any[];
   const arc = Object.values(stocks).filter((s: any)=>s.arc).length;
   const bySect = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.sector]=(m[s.sector]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
-  // Count each idea once, under its primary (first) tab only — a stock
-  // duplicated to a second tab (e.g. Swing + Long) still only has ONE
-  // idea, so this bar chart's total should match "By Sector" and the
-  // overall idea count instead of double-counting duplicated stocks.
-  const bySrc  = useMemo(()=>{ const m: any={}; all.forEach(s=>{const x=s.src?.[0];if(!x)return;const k=TAB_FULL[x]||x;m[k]=(m[k]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
+  // Count per tab via `wl` (the same watchlist-by-tab membership the tab
+  // strip badges and "Watchlist Overview" grid below both use), NOT via
+  // each stock's own `src` array — those two data shapes can legitimately
+  // diverge for a stock duplicated to a second tab (src stays fixed at
+  // creation-order tabs; wl reflects live tab membership), and counting
+  // via src made this chart disagree with what you'd actually see if you
+  // opened that tab. Counting via wl keeps every "count per tab" display
+  // in the app consistent with each other and with observable reality.
+  const bySrc  = useMemo(()=>{
+    const m: any={};
+    TABS.forEach(t=>{
+      const c=(wl[t]||[]).filter((id:string)=>stocks[id]&&!stocks[id].arc).length;
+      if (c>0) m[TAB_FULL[t]||t]=c;
+    });
+    return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]);
+  },[wl,stocks]);
   const bySt   = useMemo(()=>{ const m: any={}; all.forEach(s=>{m[s.st]=(m[s.st]||0)+1;}); return Object.entries(m).sort((a: any,b: any)=>b[1]-a[1]); },[all]);
   const hc = all.filter((s:any)=>(Object.values(s.sc) as number[]).reduce((a:number,b:number)=>a+b,0)>25||s.st==='High Conviction');
   const recentNotes = useMemo(()=>{ const ns: any[]=[]; all.forEach(s=>s.notes.forEach((n: any)=>ns.push({...n,sn:s.name,sid:s.id}))); return ns.sort((a,b)=>b.id.localeCompare(a.id)).slice(0,5); },[all]);
@@ -2470,6 +2529,7 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
   const allCnt  = (Object.values(stocks) as any[]).filter((s:any)=>!s.arc).length;
   const arcCnt  = (Object.values(stocks) as any[]).filter((s:any)=>s.arc).length;
   const [wrExpand, setWrExpand] = useState(true);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string|null>(null);
   const NAV = [
     {id:'dashboard', l:'Dashboard',   e:'◈', isActive:view==='dashboard', action:()=>setView('dashboard')},
     {id:'watchlist', l:'Watchlist',   e:'◉', isActive:view==='watchlist', action:()=>setView('watchlist')},
@@ -2544,8 +2604,8 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
                       className="px-2.5 py-2 rounded-2xl cursor-pointer hover:shadow-sm transition-all group bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-blue-200 dark:hover:border-blue-500/40">
                       <div className="flex items-center justify-between">
                         <div className="text-[11px] text-slate-700 dark:text-slate-200 font-semibold truncate flex-1 leading-tight">{wi.name}</div>
-                        <button onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove "${wi.name}" from Watch Radar permanently?`)) onRemoveWatch(wi.id);}}
-                          className="text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all ml-1 flex-shrink-0 leading-none">×</button>
+                        <button onClick={e=>{e.stopPropagation(); setConfirmRemoveId(wi.id);}} aria-label={`Remove ${wi.name} from Watch Radar`}
+                          className="w-6 h-6 flex items-center justify-center text-[14px] text-slate-300 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 sm:opacity-0 sm:group-hover:opacity-100 transition-all ml-1 flex-shrink-0 leading-none">×</button>
                       </div>
                       {wt.length>0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
@@ -2569,6 +2629,13 @@ function Sidebar({view, setView, onTabSel, activeTab, stocks, wl, col, setCol, w
         <div className="p-3 flex-shrink-0 bg-slate-50 dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800">
           <div className="flex items-center justify-between"><span className="text-[9px] text-slate-400 dark:text-slate-500 font-medium">{allCnt} ideas · {arcCnt} archived</span><button onClick={onChangePass} title="Change Password" className="text-[10px] text-slate-300 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">🔑</button></div>
         </div>
+      )}
+      {confirmRemoveId && (
+        <ConfirmModal
+          message={`Remove "${watchItems.find((w:any)=>w.id===confirmRemoveId)?.name}" from Watch Radar permanently?`}
+          onConfirm={()=>{onRemoveWatch(confirmRemoveId);setConfirmRemoveId(null);}}
+          onCancel={()=>setConfirmRemoveId(null)}
+        />
       )}
     </div>
   );
